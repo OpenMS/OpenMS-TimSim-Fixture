@@ -132,55 +132,67 @@ response compression that additional biological replicates alone will not remove
 large residual tail is additionally enriched for low-signal and poorly localized peak
 groups.
 
-## Raw-signal oracle implementation — ready to run
+## Raw-signal oracle — completed
 
-The next diagnostic implementation is complete in source and does not require TimSim or
-OpenDIA to be rerun.
+The truth-centered raw DIA-PASEF oracle was run on the existing 3+3 study without
+regenerating TimSim data or rerunning OpenDIA. The reader backend was
+`imspy_core.timstof.TimsDatasetDIA`. All 6,000 target/run observations had positive raw
+signal and all eight target transitions were matched for every observation.
 
-New entry points:
+Per-run absolute-signal scaling was highly reproducible across all six runs:
 
-- `tools/extract_raw_signal_oracle.py`: reads generated Bruker DIA-PASEF `.d` data using
-  the TimSim-compatible `imspy`/`imspy-core` raw reader; assigns each frozen precursor
-  to its simulator DIA window group; and integrates all frozen quantifying fragments in
-  fixed truth-centered RT/IM/mass windows.
-- `tools/benchmark_raw_signal_oracle.py`: decomposes per-run absolute signal and
-  condition-effect response into TimSim -> raw and raw -> OpenDIA components.
-- `scripts/run_raw_signal_oracle.sh`: probe/extract/benchmark convenience wrapper using
-  the repository `.venv/bin/python` interpreter.
+- mean TimSim input -> raw Pearson r = 0.8123; mean slope = 0.6482;
+- mean realized event-proxy -> raw Pearson r = 0.8207; mean slope = 0.6574;
+- mean raw -> OpenDIA Pearson r = 0.9011; mean slope = 1.0376;
+- raw -> OpenDIA slopes ranged only from 1.0296 to 1.0481.
 
-Canonical initial oracle parameters are ±6 s RT, ±0.03 1/K0 IM, and ±25 ppm fragment
-m/z. Extraction uses `RealizedRTApex`, `RealizedIMApexSQLite`, the frozen target-only
-transition library, and the simulator DIA window-group geometry. OpenDIA-selected
-coordinates, scores, q-values, and peak boundaries are excluded.
+Condition-effect decomposition:
 
-The oracle writes per-target/run and per-transition raw measurements, per-run response
-regressions, condition-level raw log2FC values, a Markdown report, and a JSON summary.
-A reader-probe mode validates the installed `imspy` frame API before scanning all six
-runs.
+- realized input effect -> raw oracle effect: r=0.7302, slope=0.5646, MAE=0.2710;
+- after trimming the worst 1% residuals: r=0.7817, slope=0.6159, MAE=0.2504;
+- raw oracle effect -> OpenDIA effect: r=0.7361, slope=0.9700, MAE=0.2153;
+- after trimming the worst 1% residuals: r=0.8342, slope=0.9838, MAE=0.1841.
 
-Repository validation after this implementation: 21 fast tests pass, including raw
-transition integration, raw-frame adapter normalization, decomposition of a synthetic
-realized->raw->OpenDIA response, and a contract that the oracle runner does not invoke
-OpenDIA or study generation.
+Interpretation: OpenDIA is approximately unit-response relative to the total raw fragment
+signal measured in the truth-centered oracle. The systematic amplitude compression seen
+against TimSim input is already present before OpenDIA quantification. However, the raw
+oracle integrates all signal falling in the target's fragment/RT/IM windows, including
+cofragmented/interfering ions, so it is an observable-channel diagnostic rather than a
+strict target-attributable ground truth. It must not replace design truth or simulator
+input truth.
+
+The benchmark should therefore retain three quantitative layers:
+
+1. biological/design truth and realized TimSim input abundance;
+2. truth-centered observable raw fragment signal;
+3. OpenDIA reported intensity.
+
+The current results support that OpenDIA is not the primary cause of the ~0.82 response
+compression relative to simulator input. The remaining scientific question is whether
+the raw attenuation is expected DIA cofragmentation/interference captured by the oracle,
+or a nonlinear/raw-response property of the simulator itself.
 
 ## Current next step
 
-Run the reader probe on the existing 3+3 study, then run the full raw oracle. Do not
-regenerate TimSim and do not rerun either OpenDIA lane.
+Before generating the full 25+25 production study, run an oracle sensitivity/interference
+decomposition on the existing 3+3 raw files. No TimSim or OpenDIA rerun is required.
 
-The decisive comparisons are:
+The next diagnostic should evaluate the same raw data across multiple truth-centered
+extraction windows and transition subsets, for example:
 
-1. per-run `RealizedEventProxy` vs raw-oracle intensity slope;
-2. per-run raw-oracle intensity vs OpenDIA intensity slope;
-3. realized condition log2FC vs raw-oracle log2FC;
-4. raw-oracle log2FC vs OpenDIA log2FC.
+- RT half-windows: 1, 2, 4, and 6 s;
+- IM half-windows: 0.01, 0.02, and 0.03 1/K0;
+- fragment ppm windows: 10, 15, and 25 ppm;
+- all eight transitions versus high-specificity / low-collision transition subsets.
 
-If TimSim/event-proxy -> raw is close to linear while raw -> OpenDIA retains the ~0.82
-compression, investigate OpenDIA extraction/integration before scaling. If the raw
-response is itself compressed, promote raw realized signal to the measurement-level
-quantitative truth and characterize the simulator response before changing OpenDIA.
+For each configuration, report event-proxy -> raw and raw -> OpenDIA slopes/correlations,
+plus condition-effect slopes. If event-proxy -> raw approaches unit slope as extraction
+becomes more specific, the attenuation is primarily cofragmentation/interference and the
+current biological design is suitable for scaling. If the slope remains near ~0.65 across
+tight, specific windows, inspect TimSim's target-attributable fragment generation / raw
+response before producing the 25+25 canonical benchmark.
 
-The full 25+25 production study remains on hold until this gate is resolved. For the
-eventual protein benchmark, separately evaluate a simulator-only target-selection
-contract with at least three high-quality precursors per benchmark protein; this must
-not depend on OpenDIA results.
+The production protein-level benchmark should also use a simulator-only target-selection
+contract that yields multiple high-quality precursors per protein. The current 3+
+precursor stratum already shows near-ideal protein effect recovery and should guide the
+final 1,000-precursor composition.
