@@ -132,26 +132,55 @@ response compression that additional biological replicates alone will not remove
 large residual tail is additionally enriched for low-signal and poorly localized peak
 groups.
 
+## Raw-signal oracle implementation — ready to run
+
+The next diagnostic implementation is complete in source and does not require TimSim or
+OpenDIA to be rerun.
+
+New entry points:
+
+- `tools/extract_raw_signal_oracle.py`: reads generated Bruker DIA-PASEF `.d` data using
+  the TimSim-compatible `imspy`/`imspy-core` raw reader; assigns each frozen precursor
+  to its simulator DIA window group; and integrates all frozen quantifying fragments in
+  fixed truth-centered RT/IM/mass windows.
+- `tools/benchmark_raw_signal_oracle.py`: decomposes per-run absolute signal and
+  condition-effect response into TimSim -> raw and raw -> OpenDIA components.
+- `scripts/run_raw_signal_oracle.sh`: probe/extract/benchmark convenience wrapper using
+  the repository `.venv/bin/python` interpreter.
+
+Canonical initial oracle parameters are ±6 s RT, ±0.03 1/K0 IM, and ±25 ppm fragment
+m/z. Extraction uses `RealizedRTApex`, `RealizedIMApexSQLite`, the frozen target-only
+transition library, and the simulator DIA window-group geometry. OpenDIA-selected
+coordinates, scores, q-values, and peak boundaries are excluded.
+
+The oracle writes per-target/run and per-transition raw measurements, per-run response
+regressions, condition-level raw log2FC values, a Markdown report, and a JSON summary.
+A reader-probe mode validates the installed `imspy` frame API before scanning all six
+runs.
+
+Repository validation after this implementation: 21 fast tests pass, including raw
+transition integration, raw-frame adapter normalization, decomposition of a synthetic
+realized->raw->OpenDIA response, and a contract that the oracle runner does not invoke
+OpenDIA or study generation.
+
 ## Current next step
 
-Do not generate the full 25+25 production study yet. First establish where the
-quantitative compression enters the pipeline by measuring raw simulated MS2 signal
-directly from the generated TDF/XIPM data at the realized precursor coordinates.
+Run the reader probe on the existing 3+3 study, then run the full raw oracle. Do not
+regenerate TimSim and do not rerun either OpenDIA lane.
 
-The decisive comparison is:
+The decisive comparisons are:
 
-1. TimSim input abundance vs raw simulated MS2 oracle intensity;
-2. raw simulated MS2 oracle intensity vs OpenDIA reported intensity;
-3. realized condition log2FC vs raw-oracle log2FC vs OpenDIA log2FC.
+1. per-run `RealizedEventProxy` vs raw-oracle intensity slope;
+2. per-run raw-oracle intensity vs OpenDIA intensity slope;
+3. realized condition log2FC vs raw-oracle log2FC;
+4. raw-oracle log2FC vs OpenDIA log2FC.
 
-If TimSim input -> raw signal has slope near 1 while raw signal -> OpenDIA remains
-compressed, investigate OpenDIA peak localization/integration before scaling. If the
-raw simulated signal already has the ~0.82 slope, the study benchmark should use the
-raw realized signal as the primary quantitative measurement truth rather than assuming
-a linear relationship to TimSim input abundance.
+If TimSim/event-proxy -> raw is close to linear while raw -> OpenDIA retains the ~0.82
+compression, investigate OpenDIA extraction/integration before scaling. If the raw
+response is itself compressed, promote raw realized signal to the measurement-level
+quantitative truth and characterize the simulator response before changing OpenDIA.
 
-For the eventual production protein-effect benchmark, also consider a simulator-only
-selection contract requiring at least three high-quality precursors per benchmark
-protein. The 3+ precursor stratum already shows near-ideal protein effect recovery,
-whereas single-precursor proteins dominate the protein-level heavy tail. This should be
-implemented as a benchmark-design decision, not as an OpenDIA-result-dependent filter.
+The full 25+25 production study remains on hold until this gate is resolved. For the
+eventual protein benchmark, separately evaluate a simulator-only target-selection
+contract with at least three high-quality precursors per benchmark protein; this must
+not depend on OpenDIA results.

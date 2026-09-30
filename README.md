@@ -31,6 +31,10 @@ OpenMS-TimSim-Fixture/
 │   ├── rebuild_entrapments.sh     # regenerate only the external-null library
 │   ├── run_opendia.sh             # run OpenDIA with a selected transition library
 │   ├── run_benchmark_lanes.sh     # isolated target-only and entrapment OpenDIA lanes
+│   ├── generate_study.sh          # replicate-aware control/treatment study
+│   ├── run_study_benchmark_lanes.sh # multi-run OpenDIA lanes
+│   ├── benchmark_study_lanes.sh   # post-process completed multi-run lanes
+│   ├── run_raw_signal_oracle.sh   # truth-centered raw TDF quantification diagnostic
 │   ├── benchmark_fixture.sh       # ID/quantification/correctness/FDR reports
 │   └── check_fixture.sh           # structural and truth validation
 ├── tools/                         # scientific generation and benchmark tools
@@ -234,7 +238,21 @@ If both OpenDIA lanes already completed, regenerate only the benchmark reports w
 
 The study records three quantitative truth layers: predeclared protein `DesignLog2FC`, per-run realized TimSim input abundance, and post-simulation realized precursor truth. This separates finite-cohort biological variation from OpenDIA measurement error. See `docs/STUDY_BENCHMARK.md` for the full design.
 
-For the production 25+25 study, omit the run-count overrides:
+Before scaling a study when quantitative response needs diagnosis, run the optional raw-signal oracle against already generated `.d` files:
+
+```bash
+RAW_ORACLE_PROBE_ONLY=1 ./scripts/run_raw_signal_oracle.sh \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3"
+
+./scripts/run_raw_signal_oracle.sh \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3"
+```
+
+The oracle integrates frozen library fragments directly from the generated Bruker raw data at simulator-realized RT/IM coordinates. It is diagnostic only: OpenDIA-selected coordinates, scores, and peak boundaries are excluded from oracle extraction and oracle results never feed back into target selection.
+
+For the production 25+25 study, omit the run-count overrides only after the study validation gates are satisfied:
 
 ```bash
 ./scripts/generate_study.sh \

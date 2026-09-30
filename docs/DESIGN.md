@@ -133,3 +133,17 @@ seeded independently from the synthetic-proteome and TimSim blueprint seeds.
 Quantification has separate design, realized-input, and post-simulation realized truth.
 OpenDIA is evaluated against realized finite-cohort abundance; design-vs-realized
 statistics describe biological sampling variation. See `STUDY_BENCHMARK.md`.
+
+## Raw-signal oracle non-circularity
+
+The optional raw-signal oracle is a post hoc diagnostic between simulator truth and
+OpenDIA quantification. It integrates only frozen target library fragment m/z values at
+simulator-realized RT/IM coordinates from the generated Bruker raw data. It does not use
+OpenDIA feature coordinates, scores, q-values, peak boundaries, or intensities during
+extraction.
+
+Oracle outputs are not permitted to change the frozen target set, transition library,
+entrapment construction, or canonical OpenDIA parameters. This keeps the oracle useful
+for locating quantitative response compression without turning raw truth into an
+analysis-time oracle.
+

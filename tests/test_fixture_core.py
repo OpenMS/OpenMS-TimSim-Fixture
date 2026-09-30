@@ -509,3 +509,140 @@ def test_quantification_diagnostics_reports_heavy_tail_and_run_signal_fidelity(t
     assert outliers.iloc[0]["PeptideSequence"] == "PEPCK"
     summary = __import__("json").loads((diagnostic / "quantification_diagnostics.json").read_text())
     assert summary["peptide_residual"]["gt_1_0"] == 1
+
+
+def test_raw_oracle_transition_integration_is_truth_centered() -> None:
+    import numpy as np
+
+    oracle = load_tool("extract_raw_signal_oracle")
+    mz = np.array([499.9900, 500.0000, 500.0040, 600.0000], dtype=float)
+    intensity = np.array([1.0, 10.0, 20.0, 30.0], dtype=float)
+    mobility = np.array([0.90, 1.00, 1.02, 1.00], dtype=float)
+    order = np.argsort(mz)
+    signal, peaks = oracle.integrate_transition(
+        mz[order],
+        intensity[order],
+        mobility[order],
+        product_mz=500.0,
+        target_im=1.0,
+        ppm=20.0,
+        im_half_window=0.03,
+    )
+    assert signal == 30.0
+    assert peaks == 2
+
+
+def test_raw_oracle_frame_adapter_accepts_dataframe_frames() -> None:
+    import pandas as pd
+    import numpy as np
+
+    oracle = load_tool("extract_raw_signal_oracle")
+
+    class FakeFrame:
+        def df(self):
+            return pd.DataFrame(
+                {
+                    "mz": [400.0, 500.0],
+                    "intensity": [11.0, 22.0],
+                    "inv_ion_mobility": [0.9, 1.1],
+                }
+            )
+
+    mz, intensity, mobility = oracle.frame_arrays(object(), FakeFrame(), 1)
+    assert np.allclose(mz, [400.0, 500.0])
+    assert np.allclose(intensity, [11.0, 22.0])
+    assert np.allclose(mobility, [0.9, 1.1])
+
+
+def test_raw_oracle_benchmark_separates_raw_and_opendia_response(tmp_path: Path) -> None:
+    import pandas as pd
+
+    oracle_dir = tmp_path / "oracle"
+    study_dir = tmp_path / "study"
+    oracle_dir.mkdir(); study_dir.mkdir()
+    rows = []
+    observed_rows = []
+    peptide_rows = []
+    for idx, (sequence, realized_fc, raw_fc, observed_fc) in enumerate([
+        ("PEPAK", 1.0, 1.0, 0.8),
+        ("PEPBK", 0.0, 0.0, 0.0),
+        ("PEPCK", -1.0, -1.0, -0.8),
+    ]):
+        for run_name, condition in [("C01", "control"), ("C02", "control"), ("T01", "treatment"), ("T02", "treatment")]:
+            truth = 100.0 * (2.0 ** realized_fc if condition == "treatment" else 1.0) * (idx + 1)
+            raw = 1000.0 * (2.0 ** raw_fc if condition == "treatment" else 1.0) * (idx + 1)
+            observed = 5000.0 * (2.0 ** observed_fc if condition == "treatment" else 1.0) * (idx + 1)
+            rows.append({
+                "RunName": run_name,
+                "PeptideSequence": sequence,
+                "PrecursorCharge": 2,
+                "ProteinId": f"P{idx+1}",
+                "TransitionGroupId": f"TIMSIM_{sequence}_2",
+                "PrecursorMz": 500.0 + idx,
+                "RealizedRTApex": 10.0,
+                "RealizedIMApex": 1.0,
+                "RealizedInputEvents": truth,
+                "RealizedEventProxy": truth,
+                "RawOracleIntensity": raw,
+                "MatchedTransitions": 8,
+                "TotalTransitions": 8,
+                "MatchedRawPeaks": 16,
+                "FramesConsidered": 3,
+                "WindowGroup": 1,
+            })
+            observed_rows.append({
+                "run_name": run_name,
+                "condition": condition,
+                "sequence": sequence,
+                "charge": 2,
+                "intensity": observed,
+                "rt_error_seconds": 0.1,
+                "im_error": 0.001,
+            })
+        peptide_rows.append({
+            "PeptideSequence": sequence,
+            "PrecursorCharge": 2,
+            "ProteinId": f"P{idx+1}",
+            "TreatmentClass": "up" if realized_fc > 0 else ("down" if realized_fc < 0 else "unchanged"),
+            "DesignLog2FC": realized_fc,
+            "RealizedConditionLog2FC": realized_fc,
+            "ObservedLog2FC": observed_fc,
+            "ControlDetected": 2,
+            "TreatmentDetected": 2,
+            "ControlRuns": 2,
+            "TreatmentRuns": 2,
+            "WelchPValue": 0.01,
+            "BH_QValue": 0.02,
+            "CalledDifferential": realized_fc != 0,
+            "TruthDifferential": realized_fc != 0,
+        })
+    pd.DataFrame(rows).to_csv(oracle_dir / "raw_signal_oracle_measurements.tsv", sep="\t", index=False)
+    pd.DataFrame(observed_rows).to_csv(study_dir / "precursor_measurements.tsv", sep="\t", index=False)
+    pd.DataFrame(peptide_rows).to_csv(study_dir / "peptide_effects.tsv", sep="\t", index=False)
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(TOOLS / "benchmark_raw_signal_oracle.py"),
+            "--oracle-dir", str(oracle_dir),
+            "--study-results-dir", str(study_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    summary = __import__("json").loads((oracle_dir / "raw_signal_oracle_summary.json").read_text())
+    assert abs(summary["condition_effects"]["realized_vs_raw"]["slope"] - 1.0) < 1e-9
+    assert abs(summary["condition_effects"]["raw_vs_opendia"]["slope"] - 0.8) < 1e-9
+    report = (oracle_dir / "raw_signal_oracle_report.md").read_text(encoding="utf-8")
+    assert "Realized input effect → raw oracle effect" in report
+    assert "Raw oracle effect → OpenDIA effect" in report
+
+
+def test_raw_oracle_runner_is_postprocess_only_and_uses_project_python() -> None:
+    runner = (ROOT / "scripts" / "run_raw_signal_oracle.sh").read_text(encoding="utf-8")
+    assert 'PYTHON="$FIXTURE_VENV/bin/python"' in runner
+    assert "extract_raw_signal_oracle.py" in runner
+    assert "benchmark_raw_signal_oracle.py" in runner
+    assert "run_opendia.sh" not in runner
+    assert "generate_study.sh" not in runner

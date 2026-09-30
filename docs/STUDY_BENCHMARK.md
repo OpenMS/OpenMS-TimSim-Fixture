@@ -128,3 +128,44 @@ results/study/quantification_diagnostics/
 
 Use the 3+3 diagnostic to decide whether errors are primarily finite-replicate/random
 variation or systematic quantification failures before generating the 25+25 study.
+
+## Raw-signal oracle gate
+
+When the target-only study shows systematic quantitative compression or a heavy residual
+tail, use `run_raw_signal_oracle.sh` before generating a larger cohort. The oracle reads
+the already generated Bruker `.d` files and integrates the frozen target transition m/z
+values inside fixed windows around simulator-realized RT and ion-mobility coordinates.
+OpenDIA-selected coordinates, scores, and peak boundaries are not inputs to extraction.
+
+First verify the installed `imspy` raw reader against one DIA frame:
+
+```bash
+RAW_ORACLE_PROBE_ONLY=1 ./scripts/run_raw_signal_oracle.sh STUDY_DIR BENCH_DIR
+```
+
+Then run the full oracle without rerunning TimSim or OpenDIA:
+
+```bash
+./scripts/run_raw_signal_oracle.sh STUDY_DIR BENCH_DIR
+```
+
+Default truth-centered integration windows are ±6 s in RT, ±0.03 1/K0 in ion mobility,
+and ±25 ppm around each of the eight frozen library fragment m/z values. They can be
+overridden with `RAW_ORACLE_RT_HALF_WINDOW`, `RAW_ORACLE_IM_HALF_WINDOW`, and
+`RAW_ORACLE_FRAGMENT_PPM` for sensitivity analysis; the canonical result should retain
+one declared parameter set rather than tuning windows against OpenDIA performance.
+
+The raw-oracle report decomposes the measurement chain into:
+
+1. TimSim realized input/event proxy -> raw integrated fragment signal;
+2. raw integrated fragment signal -> OpenDIA intensity;
+3. realized condition log2FC -> raw-oracle log2FC -> OpenDIA log2FC.
+
+`RealizedEventProxy` is the preferred charge-state-specific absolute-signal comparator
+because it includes peptide events, chromatographic frame mass, ion relative abundance,
+and mobility scan mass. Condition effects remain the primary diagnostic because
+sequence-specific fragment yield cancels within a precursor across runs.
+
+The oracle is strictly diagnostic. It must never be used to select benchmark targets,
+construct the assay library, choose entrapments, or tune OpenDIA on the canonical fixture.
+
