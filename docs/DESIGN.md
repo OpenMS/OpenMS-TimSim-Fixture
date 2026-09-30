@@ -70,6 +70,10 @@ The current selector requires each target to be measurable in all three runs and
 
 Only one realized charge state per peptide sequence is retained. Selection fails if the requested target count cannot be satisfied under the fixed criteria.
 
+For multi-run production studies, eligibility is evaluated on the blueprint only. The canonical production contract is **250 proteins × 4 precursors/protein = 1,000 targets**. A protein must have at least four eligible unique peptide precursors. Within each protein, selection is two-stage: the strongest 2× signal shortlist is formed first, then the final four are chosen by simulator-only fragment-collision burden. Protein selection is balanced across RT, precursor m/z, ion mobility, charge, and SWATH geometry.
+
+Collision specificity is computed from the complete TimSim blueprint fragment universe using precursor window group, RT/IM proximity, fragment m/z proximity, and predicted fragment intensity. It does not use observed raw intensity, the raw-oracle sweep result, or any OpenDIA output. The production selector fails closed if fewer than the declared number of proteins satisfy the multiplicity contract; the remedy is to enlarge the synthetic candidate universe, not relax high-signal thresholds.
+
 ## Transition library
 
 For each selected precursor, the generator exports a fixed number of OpenSWATH/OpenDIA input transitions from the baseline TimSim truth.

@@ -203,17 +203,22 @@ Fifty external negatives are sufficient for a smoke test but not for a precise 1
 
 ## Multi-run study benchmark
 
-For a replicate-aware benchmark, use `generate_study.sh`. The canonical larger study is **25 control + 25 treatment runs**, with **1,000 frozen targets** and **1,000 independent entrapments**. Targets are selected from a separate TimSim blueprint before treatment effects or replicate abundance variation are created.
+For a replicate-aware benchmark, use `generate_study.sh`. The canonical larger study is **25 control + 25 treatment runs**, with **1,000 frozen targets** and **1,000 independent entrapments**. The production target set is protein-balanced: **250 proteins × 4 high-quality precursors/protein**. Targets are selected from a separate TimSim blueprint before treatment effects or replicate abundance variation are created.
 
-Validate the architecture first with 3+3 runs at the full library size:
+The protein-balanced selector retains the fixed high-signal eligibility criteria, gates each protein to its strongest candidate shortlist, and uses simulator-only fragment-collision geometry to choose the final four precursors. OpenDIA output and observed raw intensity are excluded from selection. If fewer than 250 proteins have four qualifying precursors, generation fails closed; increase the synthetic candidate population rather than weakening thresholds.
+
+Validate the final production composition first with 3+3 runs at the full library size:
 
 ```bash
 ./scripts/generate_study.sh \
   --reference /absolute/path/to/reference.d \
-  --output "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
+  --output "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/production_validation_3x3" \
   --control-runs 3 \
   --treatment-runs 3 \
   --precursors 1000 \
+  --target-proteins 250 \
+  --precursors-per-protein 4 \
+  --selection-mode protein_balanced \
   --entrapments 1000 \
   --simulated-peptides 10000 \
   --fasta-peptides 20000
@@ -224,8 +229,8 @@ Then benchmark the two isolated OpenDIA lanes:
 ```bash
 export OPENMS_BUILD=/path/to/OpenMS-build
 THREADS=12 ./scripts/run_study_benchmark_lanes.sh \
-  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
-  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3"
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/production_validation_3x3" \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/production_validation_3x3"
 ```
 
 If both OpenDIA lanes already completed, regenerate only the benchmark reports without rerunning OpenDIA:

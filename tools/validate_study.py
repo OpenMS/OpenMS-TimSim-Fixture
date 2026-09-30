@@ -11,6 +11,52 @@ from pathlib import Path
 import pandas as pd
 
 
+def validate_protein_selection_contract(selected: pd.DataFrame, manifest: dict) -> None:
+    selection = manifest.get("selection", {})
+    if selection.get("mode") != "protein_balanced":
+        return
+    target_proteins = int(selection.get("target_proteins", 0))
+    precursors_per_protein = int(selection.get("precursors_per_protein", 0))
+    expected_targets = target_proteins * precursors_per_protein
+    if target_proteins < 1 or precursors_per_protein < 1:
+        raise SystemExit("Protein-balanced selection manifest is missing positive target_proteins/precursors_per_protein")
+    if int(manifest.get("requested_precursors", 0)) != expected_targets:
+        raise SystemExit(
+            "Protein-balanced manifest is inconsistent: requested_precursors != "
+            "target_proteins * precursors_per_protein"
+        )
+    counts = selected.groupby("protein_id")["precursor_key"].nunique()
+    if len(counts) != target_proteins:
+        raise SystemExit(
+            f"Protein-balanced selection contains {len(counts)} proteins; expected {target_proteins}"
+        )
+    bad = counts[counts.ne(precursors_per_protein)]
+    if not bad.empty:
+        examples = ", ".join(f"{protein}:{count}" for protein, count in bad.head(10).items())
+        raise SystemExit(
+            f"Protein-balanced selection requires exactly {precursors_per_protein} precursors/protein; "
+            f"violations: {examples}"
+        )
+    required_specificity = {
+        "specificity_collision_free_fragments",
+        "specificity_all_competitor_precursors_sum",
+        "specificity_all_collision_count_sum",
+        "specificity_top_fragments",
+        "specificity_top_competitor_precursors_sum",
+        "specificity_top_collision_count_sum",
+        "protein_selection_rank",
+        "protein_precursor_rank",
+    }
+    missing = required_specificity - set(selected.columns)
+    if missing:
+        raise SystemExit(
+            "Protein-balanced selection is missing simulator-only specificity/protein-rank fields: "
+            + ", ".join(sorted(missing))
+        )
+    if selected["protein_selection_rank"].nunique() != target_proteins:
+        raise SystemExit("protein_selection_rank is not unique per selected protein")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("study_root", type=Path)
@@ -45,6 +91,8 @@ def main() -> int:
         raise SystemExit("Treatment run count does not match fixture manifest")
     if len(selected) != expected_targets or selected["precursor_key"].nunique() != expected_targets:
         raise SystemExit(f"Selected precursor table does not contain exactly {expected_targets} unique targets")
+
+    validate_protein_selection_contract(selected, manifest)
 
     expected_entrapments = int(manifest.get("entrapment", {}).get("precursors", 0))
     transitions_per = int(manifest["transitions_per_precursor"])
@@ -107,8 +155,15 @@ def main() -> int:
     print(
         f"Study contract OK: {expected_runs} runs "
         f"({counts.get('control', 0)} control + {counts.get('treatment', 0)} treatment), "
-        f"{expected_targets} frozen targets, {proteins} proteins"
+        f"{expected_targets} frozen targets, {proteins} design proteins"
     )
+    selection = manifest.get("selection", {})
+    if selection.get("mode") == "protein_balanced":
+        print(
+            "Production target contract OK: "
+            f"{selection['target_proteins']} proteins x "
+            f"{selection['precursors_per_protein']} precursors/protein"
+        )
     print("Design truth, realized abundance truth, and per-run realized precursor truth are internally consistent")
     return 0
 

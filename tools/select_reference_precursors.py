@@ -11,12 +11,281 @@ import argparse
 import json
 import math
 import sqlite3
-from collections import Counter
+import sys
+from bisect import bisect_left, bisect_right
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
 import select_high_signal_precursors as shared
 from export_openswath_tsv import read_candidates
+
+
+def _signal_sort_key(row: dict[str, Any]) -> tuple[float, float, float, int, str]:
+    return (
+        -float(row["min_realized_event_proxy"]),
+        -float(row["min_ion_relative_abundance"]),
+        -float(row["total_fragment_intensity"]),
+        int(row["charge"]),
+        str(row["precursor_key"]),
+    )
+
+
+def _build_fragment_collision_index(
+    fragment_candidates: list[Any],
+    windows: list[Any],
+    mz_window_margin: float,
+    im_window_margin: float,
+) -> dict[int, tuple[list[float], list[tuple[float, float, float, str, float]]]]:
+    by_group: dict[int, list[tuple[float, float, float, str, float]]] = defaultdict(list)
+    for candidate in fragment_candidates:
+        window = shared.assign_window(candidate, windows, mz_window_margin, im_window_margin)
+        if window is None:
+            continue
+        key = f"{candidate.sequence}/{candidate.precursor_charge}"
+        for fragment in candidate.fragments:
+            by_group[int(window.window_group)].append(
+                (
+                    float(fragment["mz"]),
+                    float(candidate.rt_seconds),
+                    float(candidate.precursor_im),
+                    key,
+                    float(fragment["intensity"]),
+                )
+            )
+    index: dict[int, tuple[list[float], list[tuple[float, float, float, str, float]]]] = {}
+    for group, rows in by_group.items():
+        rows.sort(key=lambda item: item[0])
+        index[group] = ([item[0] for item in rows], rows)
+    return index
+
+
+def _specificity_metrics(
+    candidate: Any,
+    window_group: int,
+    collision_index: dict[int, tuple[list[float], list[tuple[float, float, float, str, float]]]],
+    *,
+    max_rt_seconds: float,
+    max_im_1_over_k0: float,
+    max_fragment_ppm: float,
+    top_fragments: int,
+) -> dict[str, float | int]:
+    target_key = f"{candidate.sequence}/{candidate.precursor_charge}"
+    mz_values, background = collision_index.get(window_group, ([], []))
+    fragment_rows: list[tuple[int, int, float, float, float]] = []
+    for fragment in candidate.fragments:
+        product_mz = float(fragment["mz"])
+        delta = product_mz * max_fragment_ppm * 1e-6
+        left = bisect_left(mz_values, product_mz - delta)
+        right = bisect_right(mz_values, product_mz + delta)
+        competitor_keys: set[str] = set()
+        collision_count = 0
+        collision_intensity = 0.0
+        for mz, rt, im, precursor_key, predicted_intensity in background[left:right]:
+            if precursor_key == target_key:
+                continue
+            if abs(rt - float(candidate.rt_seconds)) > max_rt_seconds:
+                continue
+            if abs(im - float(candidate.precursor_im)) > max_im_1_over_k0:
+                continue
+            collision_count += 1
+            competitor_keys.add(precursor_key)
+            collision_intensity += predicted_intensity
+        fragment_rows.append(
+            (
+                len(competitor_keys),
+                collision_count,
+                collision_intensity,
+                -float(fragment["intensity"]),
+                product_mz,
+            )
+        )
+
+    fragment_rows.sort()
+    top = fragment_rows[: min(top_fragments, len(fragment_rows))]
+    return {
+        "specificity_collision_free_fragments": sum(row[0] == 0 for row in fragment_rows),
+        "specificity_all_competitor_precursors_sum": sum(row[0] for row in fragment_rows),
+        "specificity_all_collision_count_sum": sum(row[1] for row in fragment_rows),
+        "specificity_all_collision_predicted_intensity": sum(row[2] for row in fragment_rows),
+        "specificity_top_fragments": len(top),
+        "specificity_top_competitor_precursors_sum": sum(row[0] for row in top),
+        "specificity_top_collision_count_sum": sum(row[1] for row in top),
+        "specificity_top_collision_predicted_intensity": sum(row[2] for row in top),
+    }
+
+
+def _annotate_collision_specificity(
+    eligible: list[dict[str, Any]],
+    fragment_candidates: list[Any],
+    windows: list[Any],
+    *,
+    mz_window_margin: float,
+    im_window_margin: float,
+    max_rt_seconds: float,
+    max_im_1_over_k0: float,
+    max_fragment_ppm: float,
+    top_fragments: int,
+) -> None:
+    candidate_by_key = {
+        (str(candidate.sequence), int(candidate.precursor_charge)): candidate
+        for candidate in fragment_candidates
+    }
+    collision_index = _build_fragment_collision_index(
+        fragment_candidates, windows, mz_window_margin, im_window_margin
+    )
+    for row in eligible:
+        key = (str(row["sequence"]), int(row["charge"]))
+        candidate = candidate_by_key.get(key)
+        if candidate is None:
+            raise RuntimeError(f"Missing blueprint fragment candidate for {row['precursor_key']}")
+        row.update(
+            _specificity_metrics(
+                candidate,
+                int(row["swath_window_group"]),
+                collision_index,
+                max_rt_seconds=max_rt_seconds,
+                max_im_1_over_k0=max_im_1_over_k0,
+                max_fragment_ppm=max_fragment_ppm,
+                top_fragments=top_fragments,
+            )
+        )
+
+
+def _protein_precursor_shortlist(
+    rows: list[dict[str, Any]],
+    precursors_per_protein: int,
+    shortlist_multiplier: int,
+) -> list[dict[str, Any]]:
+    signal_order = sorted(rows, key=_signal_sort_key)
+    shortlist_size = min(
+        len(signal_order),
+        max(precursors_per_protein, precursors_per_protein * shortlist_multiplier),
+    )
+    shortlist = signal_order[:shortlist_size]
+    specificity_order = sorted(
+        shortlist,
+        key=lambda row: (
+            int(row["specificity_top_competitor_precursors_sum"]),
+            int(row["specificity_all_competitor_precursors_sum"]),
+            int(row["specificity_top_collision_count_sum"]),
+            int(row["specificity_all_collision_count_sum"]),
+            float(row["specificity_top_collision_predicted_intensity"]),
+            float(row["specificity_all_collision_predicted_intensity"]),
+            -int(row["specificity_collision_free_fragments"]),
+            *_signal_sort_key(row),
+        ),
+    )
+    chosen = [row.copy() for row in specificity_order[:precursors_per_protein]]
+    for rank, row in enumerate(chosen, start=1):
+        row["protein_precursor_rank"] = rank
+    return chosen
+
+
+def _balanced_protein_select(
+    eligible: list[dict[str, Any]],
+    *,
+    target_proteins: int,
+    precursors_per_protein: int,
+    shortlist_multiplier: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    by_protein: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in eligible:
+        by_protein[str(row["protein_id"])].append(row)
+
+    eligible_per_protein = Counter(len(rows) for rows in by_protein.values())
+    qualified = {
+        protein: _protein_precursor_shortlist(rows, precursors_per_protein, shortlist_multiplier)
+        for protein, rows in by_protein.items()
+        if len(rows) >= precursors_per_protein
+    }
+    if len(qualified) < target_proteins:
+        raise ValueError(
+            f"Only {len(qualified)} proteins have at least {precursors_per_protein} eligible precursor groups; "
+            f"{target_proteins} proteins are required"
+        )
+
+    dimensions = {
+        "rt_bin": 3.0,
+        "mz_bin": 2.0,
+        "im_bin": 2.0,
+        "swath_window_index": 2.5,
+        "charge": 1.5,
+    }
+    all_unit_rows = [row for rows in qualified.values() for row in rows]
+    total_precursors = target_proteins * precursors_per_protein
+    targets = {
+        dimension: shared.proportional_targets(
+            [row[dimension] for row in all_unit_rows], total_precursors
+        )
+        for dimension in dimensions
+    }
+    selected_counts = {dimension: Counter() for dimension in dimensions}
+
+    weakest_signal = {
+        protein: min(math.log10(max(float(row["min_realized_event_proxy"]), 1.0)) for row in rows)
+        for protein, rows in qualified.items()
+    }
+    signal_min = min(weakest_signal.values())
+    signal_max = max(weakest_signal.values())
+    signal_span = max(signal_max - signal_min, 1e-12)
+    specificity_penalty = {
+        protein: sum(int(row["specificity_top_competitor_precursors_sum"]) for row in rows)
+        for protein, rows in qualified.items()
+    }
+
+    remaining = dict(qualified)
+    selected_units: list[tuple[str, list[dict[str, Any]]]] = []
+    for _ in range(target_proteins):
+        best_protein: str | None = None
+        best_tie: tuple[float, float, float] | None = None
+        for protein, rows in remaining.items():
+            coverage_score = 0.0
+            for row in rows:
+                for dimension, weight in dimensions.items():
+                    category = row[dimension]
+                    target = max(targets[dimension].get(category, 0), 1)
+                    deficit = (target - selected_counts[dimension][category]) / target
+                    coverage_score += weight * deficit
+            coverage_score /= max(len(rows), 1)
+            signal_quality = (weakest_signal[protein] - signal_min) / signal_span
+            specificity_quality = 1.0 / (1.0 + specificity_penalty[protein])
+            score = coverage_score + 0.15 * signal_quality + 0.10 * specificity_quality
+            tie = (score, signal_quality, specificity_quality)
+            if (
+                best_tie is None
+                or tie > best_tie
+                or (tie == best_tie and protein < str(best_protein))
+            ):
+                best_protein = protein
+                best_tie = tie
+        assert best_protein is not None
+        rows = remaining.pop(best_protein)
+        selected_units.append((best_protein, rows))
+        for row in rows:
+            for dimension in dimensions:
+                selected_counts[dimension][row[dimension]] += 1
+
+    selected: list[dict[str, Any]] = []
+    for protein_rank, (protein, rows) in enumerate(selected_units, start=1):
+        for row in sorted(rows, key=lambda item: int(item["protein_precursor_rank"])):
+            chosen = row.copy()
+            chosen["protein_selection_rank"] = protein_rank
+            chosen["selection_rank"] = len(selected) + 1
+            selected.append(chosen)
+
+    metadata = {
+        "proteins_with_any_eligible_precursor": len(by_protein),
+        "proteins_with_required_precursors": len(qualified),
+        "eligible_precursors_per_protein_distribution": {
+            str(count): proteins for count, proteins in sorted(eligible_per_protein.items())
+        },
+    }
+    return selected, metadata
 
 
 def main() -> int:
@@ -28,6 +297,18 @@ def main() -> int:
     parser.add_argument("--qc-json", type=Path, required=True)
     parser.add_argument("--qc-report", type=Path, required=True)
     parser.add_argument("--precursors", type=int, default=1000)
+    parser.add_argument(
+        "--selection-mode",
+        choices=("global_stratified", "protein_balanced"),
+        default="global_stratified",
+    )
+    parser.add_argument("--target-proteins", type=int, default=250)
+    parser.add_argument("--precursors-per-protein", type=int, default=4)
+    parser.add_argument("--signal-shortlist-multiplier", type=int, default=2)
+    parser.add_argument("--specificity-max-rt-seconds", type=float, default=6.0)
+    parser.add_argument("--specificity-max-im", type=float, default=0.03)
+    parser.add_argument("--specificity-max-fragment-ppm", type=float, default=25.0)
+    parser.add_argument("--specificity-top-fragments", type=int, default=4)
     parser.add_argument("--min-realized-event-proxy", type=float, default=50000.0)
     parser.add_argument("--min-frame-abundance-sum", type=float, default=0.90)
     parser.add_argument("--min-scan-abundance-sum", type=float, default=0.95)
@@ -46,6 +327,24 @@ def main() -> int:
 
     if args.precursors < 1:
         parser.error("--precursors must be positive")
+    if args.target_proteins < 1:
+        parser.error("--target-proteins must be positive")
+    if args.precursors_per_protein < 1:
+        parser.error("--precursors-per-protein must be positive")
+    if args.signal_shortlist_multiplier < 1:
+        parser.error("--signal-shortlist-multiplier must be positive")
+    if args.specificity_top_fragments < 1:
+        parser.error("--specificity-top-fragments must be positive")
+    if any(value <= 0 for value in (args.specificity_max_rt_seconds, args.specificity_max_im, args.specificity_max_fragment_ppm)):
+        parser.error("specificity geometry limits must be positive")
+    if args.selection_mode == "protein_balanced":
+        expected = args.target_proteins * args.precursors_per_protein
+        if args.precursors != expected:
+            parser.error(
+                "protein_balanced selection requires --precursors == "
+                "--target-proteins * --precursors-per-protein "
+                f"({args.precursors} != {expected})"
+            )
     if not args.blueprint_db.is_file():
         raise SystemExit(f"Blueprint DB does not exist: {args.blueprint_db}")
     if not 0 <= args.rt_edge_margin_fraction < 0.5:
@@ -166,7 +465,10 @@ def main() -> int:
     summary = {
         "selection_is_opendia_independent": True,
         "selection_scope": "blueprint_only_before_condition_effects",
+        "selection_mode": args.selection_mode,
         "requested_precursors": args.precursors,
+        "requested_target_proteins": args.target_proteins if args.selection_mode == "protein_balanced" else None,
+        "precursors_per_protein": args.precursors_per_protein if args.selection_mode == "protein_balanced" else None,
         "total_ions_in_blueprint_db": total_ions,
         "fragment_eligible_ions": len(fragment_candidates),
         "eligible_ions_after_all_filters": len(eligible_ions),
@@ -184,24 +486,75 @@ def main() -> int:
         },
         "cumulative_filter_counts": dict(stages),
         "selected_precursors": 0,
-        "status": "insufficient_candidates" if len(eligible) < args.precursors else "ready",
+        "status": "ready",
     }
+
+    failure_message: str | None = None
     if len(eligible) < args.precursors:
+        summary["status"] = "insufficient_candidates"
+        failure_message = (
+            f"Only {len(eligible)} unique high-signal precursor groups satisfy blueprint criteria; "
+            f"{args.precursors} are required. Increase candidate population; do not relax thresholds merely to reach the target count."
+        )
+
+    selected: list[dict[str, Any]]
+    if failure_message is None and args.selection_mode == "protein_balanced":
+        eligible_counts = Counter(str(row["protein_id"]) for row in eligible)
+        qualified_proteins = sum(count >= args.precursors_per_protein for count in eligible_counts.values())
+        summary["proteins_with_any_eligible_precursor"] = len(eligible_counts)
+        summary["proteins_with_required_precursors"] = qualified_proteins
+        summary["specificity"] = {
+            "source": "complete_TimSim_blueprint_fragment_geometry",
+            "uses_opendia": False,
+            "uses_observed_raw_intensity": False,
+            "max_rt_seconds": args.specificity_max_rt_seconds,
+            "max_im_1_over_k0": args.specificity_max_im,
+            "max_fragment_ppm": args.specificity_max_fragment_ppm,
+            "top_fragments": args.specificity_top_fragments,
+            "signal_shortlist_multiplier": args.signal_shortlist_multiplier,
+        }
+        if qualified_proteins < args.target_proteins:
+            summary["status"] = "insufficient_protein_redundancy"
+            failure_message = (
+                f"Only {qualified_proteins} proteins have at least {args.precursors_per_protein} eligible precursor groups; "
+                f"{args.target_proteins} proteins are required for the production contract. "
+                "Increase the synthetic candidate population; do not relax the high-signal criteria."
+            )
+        else:
+            _annotate_collision_specificity(
+                eligible,
+                fragment_candidates,
+                windows,
+                mz_window_margin=args.mz_window_margin,
+                im_window_margin=args.im_window_margin,
+                max_rt_seconds=args.specificity_max_rt_seconds,
+                max_im_1_over_k0=args.specificity_max_im,
+                max_fragment_ppm=args.specificity_max_fragment_ppm,
+                top_fragments=args.specificity_top_fragments,
+            )
+            selected, protein_metadata = _balanced_protein_select(
+                eligible,
+                target_proteins=args.target_proteins,
+                precursors_per_protein=args.precursors_per_protein,
+                shortlist_multiplier=args.signal_shortlist_multiplier,
+            )
+            summary.update(protein_metadata)
+    elif failure_message is None:
+        selected = shared.stratified_select(eligible, args.precursors)
+    else:
+        selected = []
+
+    if failure_message is not None:
         args.qc_json.parent.mkdir(parents=True, exist_ok=True)
         args.qc_json.write_text(json.dumps(summary, indent=2, allow_nan=True) + "\n", encoding="utf-8")
         args.qc_report.parent.mkdir(parents=True, exist_ok=True)
         args.qc_report.write_text(
             "# Blueprint precursor-selection QC\n\n"
-            f"Selection failed without weakening criteria: **{len(eligible)}** unique precursor groups qualified; "
-            f"**{args.precursors}** are required. Increase the synthetic candidate population.\n",
+            f"Selection failed without weakening criteria: {failure_message}\n",
             encoding="utf-8",
         )
-        raise SystemExit(
-            f"Only {len(eligible)} unique high-signal precursor groups satisfy blueprint criteria; "
-            f"{args.precursors} are required. Increase candidate population; do not relax thresholds merely to reach the target count."
-        )
+        raise SystemExit(failure_message)
 
-    selected = shared.stratified_select(eligible, args.precursors)
     selected.sort(key=lambda row: int(row["selection_rank"]))
     selected_fields = [
         "selection_rank", "precursor_key", "sequence", "protein_id", "charge",
@@ -213,6 +566,15 @@ def main() -> int:
         "swath_window_index", "swath_window_group", "swath_window_label",
         "swath_mz_lower", "swath_mz_upper", "swath_im_lower", "swath_im_upper",
         "rt_bin", "mz_bin", "im_bin",
+        "protein_selection_rank", "protein_precursor_rank",
+        "specificity_collision_free_fragments",
+        "specificity_all_competitor_precursors_sum",
+        "specificity_all_collision_count_sum",
+        "specificity_all_collision_predicted_intensity",
+        "specificity_top_fragments",
+        "specificity_top_competitor_precursors_sum",
+        "specificity_top_collision_count_sum",
+        "specificity_top_collision_predicted_intensity",
     ]
     shared.write_tsv(args.selected_out, selected, selected_fields)
 
@@ -250,6 +612,9 @@ def main() -> int:
 
     summary["selected_precursors"] = len(selected)
     summary["selected_proteins"] = len({row["protein_id"] for row in selected})
+    summary["selected_precursors_per_protein"] = dict(
+        sorted(Counter(Counter(str(row["protein_id"]) for row in selected).values()).items())
+    )
     summary["selected_charge_counts"] = dict(sorted(Counter(str(row["charge"]) for row in selected).items()))
     summary["selected_distributions"] = {
         "reference_realized_event_proxy": shared.describe(row["min_realized_event_proxy"] for row in selected),
@@ -270,9 +635,19 @@ def main() -> int:
         "Targets were frozen from the TimSim blueprint before control/treatment replicate effects were created.",
         "OpenDIA results and condition-specific realized abundance were not used for selection.",
         "",
+        f"- Selection mode: **{args.selection_mode}**",
         f"- Selected precursor groups: **{len(selected)}/{args.precursors}**",
-        f"- Eligible unique precursor groups before stratification: **{len(eligible)}**",
+        f"- Eligible unique precursor groups before selection: **{len(eligible)}**",
         f"- Selected proteins: **{summary['selected_proteins']}**",
+        *(
+            [
+                f"- Production composition: **{args.target_proteins} proteins × {args.precursors_per_protein} precursors/protein**",
+                f"- Proteins with at least {args.precursors_per_protein} eligible precursors: **{summary['proteins_with_required_precursors']}**",
+                "- Fragment specificity: **simulator-only blueprint collision geometry**",
+            ]
+            if args.selection_mode == "protein_balanced"
+            else []
+        ),
         f"- Minimum blueprint realized event proxy: **{args.min_realized_event_proxy:g}**",
         "",
         "Condition-specific missingness is intentionally allowed after selection and is part of the benchmark.",
@@ -281,7 +656,12 @@ def main() -> int:
     args.qc_report.parent.mkdir(parents=True, exist_ok=True)
     args.qc_report.write_text("\n".join(lines), encoding="utf-8")
     print(f"Selected exactly {len(selected)} blueprint high-signal precursor groups")
-    print(f"Eligible unique peptide precursors before stratification: {len(eligible)}")
+    if args.selection_mode == "protein_balanced":
+        print(
+            f"Production composition: {args.target_proteins} proteins x "
+            f"{args.precursors_per_protein} precursors/protein"
+        )
+    print(f"Eligible unique peptide precursors before selection: {len(eligible)}")
     return 0
 
 

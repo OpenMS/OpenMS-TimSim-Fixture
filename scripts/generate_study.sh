@@ -11,6 +11,9 @@ OUTPUT_ROOT="$OPENMS_TIMSIM_DATA_ROOT/studies/control25_treatment25_targets1000"
 CONTROL_RUNS=25
 TREATMENT_RUNS=25
 PRECURSORS=1000
+TARGET_PROTEINS=250
+PRECURSORS_PER_PROTEIN=4
+SELECTION_MODE=protein_balanced
 ENTRAPMENTS=1000
 SIMULATED_PEPTIDES=10000
 FASTA_PEPTIDES=20000
@@ -58,6 +61,9 @@ Study options:
   --control-runs N                    Control biological replicates (default: 25)
   --treatment-runs N                  Treatment biological replicates (default: 25)
   --precursors N                      Frozen true precursor groups (default: 1000)
+  --target-proteins N                 Protein-balanced target proteins (default: 250)
+  --precursors-per-protein N          Frozen precursors per selected protein (default: 4)
+  --selection-mode MODE               protein_balanced (default) or global_stratified
   --entrapments N                     Independent external-null precursors (default: 1000)
   --simulated-peptides N              Blueprint TimSim peptide population (default: 10000)
   --fasta-peptides N                  Synthetic FASTA peptide pool (default: 20000)
@@ -89,6 +95,9 @@ while [[ $# -gt 0 ]]; do
     --control-runs) CONTROL_RUNS="${2:?missing value}"; shift 2 ;;
     --treatment-runs) TREATMENT_RUNS="${2:?missing value}"; shift 2 ;;
     --precursors) PRECURSORS="${2:?missing value}"; shift 2 ;;
+    --target-proteins) TARGET_PROTEINS="${2:?missing value}"; shift 2 ;;
+    --precursors-per-protein) PRECURSORS_PER_PROTEIN="${2:?missing value}"; shift 2 ;;
+    --selection-mode) SELECTION_MODE="${2:?missing value}"; shift 2 ;;
     --entrapments) ENTRAPMENTS="${2:?missing value}"; shift 2 ;;
     --simulated-peptides) SIMULATED_PEPTIDES="${2:?missing value}"; shift 2 ;;
     --fasta-peptides) FASTA_PEPTIDES="${2:?missing value}"; shift 2 ;;
@@ -110,13 +119,24 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$REFERENCE_D" ]] || { usage; exit 2; }
-for value in "$CONTROL_RUNS" "$TREATMENT_RUNS" "$PRECURSORS" "$ENTRAPMENTS" "$SIMULATED_PEPTIDES" "$FASTA_PEPTIDES" "$TIMSIM_THREADS"; do
+for value in "$CONTROL_RUNS" "$TREATMENT_RUNS" "$PRECURSORS" "$TARGET_PROTEINS" "$PRECURSORS_PER_PROTEIN" "$ENTRAPMENTS" "$SIMULATED_PEPTIDES" "$FASTA_PEPTIDES" "$TIMSIM_THREADS"; do
   [[ "$value" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: run/count/thread options must be positive integers" >&2; exit 2; }
 done
 for seed in "$BLUEPRINT_SEED" "$FASTA_SEED" "$STUDY_SEED" "$SAMPLE_SEED_BASE" "$ENTRAPMENT_SEED"; do
   [[ "$seed" =~ ^[0-9]+$ ]] || { echo "ERROR: seeds must be non-negative integers" >&2; exit 2; }
   (( seed <= 4294967295 )) || { echo "ERROR: seed exceeds uint32 range: $seed" >&2; exit 2; }
 done
+[[ "$SELECTION_MODE" == "protein_balanced" || "$SELECTION_MODE" == "global_stratified" ]] || {
+  echo "ERROR: --selection-mode must be protein_balanced or global_stratified" >&2
+  exit 2
+}
+if [[ "$SELECTION_MODE" == "protein_balanced" ]]; then
+  EXPECTED_BALANCED_PRECURSORS=$(( TARGET_PROTEINS * PRECURSORS_PER_PROTEIN ))
+  (( PRECURSORS == EXPECTED_BALANCED_PRECURSORS )) || {
+    echo "ERROR: protein_balanced selection requires --precursors == --target-proteins * --precursors-per-protein ($PRECURSORS != $EXPECTED_BALANCED_PRECURSORS)" >&2
+    exit 2
+  }
+fi
 (( SIMULATED_PEPTIDES >= PRECURSORS )) || { echo "ERROR: --simulated-peptides must be >= --precursors" >&2; exit 2; }
 (( FASTA_PEPTIDES >= SIMULATED_PEPTIDES )) || { echo "ERROR: --fasta-peptides must be >= --simulated-peptides" >&2; exit 2; }
 [[ -f "$VENV/bin/activate" ]] || { echo "ERROR: run ./scripts/setup.sh first" >&2; exit 1; }
@@ -189,6 +209,9 @@ python "$ROOT/tools/select_reference_precursors.py" \
   --qc-json "$QC_JSON" \
   --qc-report "$QC_REPORT" \
   --precursors "$PRECURSORS" \
+  --selection-mode "$SELECTION_MODE" \
+  --target-proteins "$TARGET_PROTEINS" \
+  --precursors-per-protein "$PRECURSORS_PER_PROTEIN" \
   --min-realized-event-proxy "$MIN_REALIZED_EVENT_PROXY" \
   --min-frame-abundance-sum "$MIN_FRAME_ABUNDANCE_SUM" \
   --min-scan-abundance-sum "$MIN_SCAN_ABUNDANCE_SUM" \
@@ -360,6 +383,19 @@ manifest = {
     },
     "selection": {
         "scope": "blueprint_only_before_condition_effects",
+        "mode": ${SELECTION_MODE@Q},
+        "target_proteins": int(${TARGET_PROTEINS@Q}),
+        "precursors_per_protein": int(${PRECURSORS_PER_PROTEIN@Q}),
+        "collision_specificity": {
+            "source": "complete_TimSim_blueprint_fragment_geometry",
+            "uses_opendia": False,
+            "uses_observed_raw_intensity": False,
+            "max_rt_seconds": 6.0,
+            "max_im_1_over_k0": 0.03,
+            "max_fragment_ppm": 25.0,
+            "top_fragments": 4,
+            "signal_shortlist_multiplier": 2,
+        },
         "min_realized_event_proxy_blueprint": float(${MIN_REALIZED_EVENT_PROXY@Q}),
         "min_frame_abundance_sum_blueprint": float(${MIN_FRAME_ABUNDANCE_SUM@Q}),
         "min_scan_abundance_sum_blueprint": float(${MIN_SCAN_ABUNDANCE_SUM@Q}),
@@ -409,6 +445,9 @@ python "$ROOT/tools/validate_experiment.py" "${RUN_DBS[@]}"
 printf '\nMulti-run study generated under: %s\n' "$OUTPUT_ROOT"
 printf 'Runs: %d control + %d treatment = %d\n' "$CONTROL_RUNS" "$TREATMENT_RUNS" "$EXPECTED_RUNS"
 printf 'Targets: %d; independent entrapments: %d\n' "$PRECURSORS" "$ENTRAPMENTS"
+if [[ "$SELECTION_MODE" == "protein_balanced" ]]; then
+  printf 'Production target composition: %d proteins x %d precursors/protein\n' "$TARGET_PROTEINS" "$PRECURSORS_PER_PROTEIN"
+fi
 printf 'Study manifest: %s\n' "$STUDY_MANIFEST"
 printf 'Design truth:   %s\n' "$DESIGN_TRUTH"
 printf 'Realized truth: %s\n' "$REALIZED_TRUTH"

@@ -99,6 +99,16 @@ reports run-level, global-peptide, and exported-result FDP plus q/PEP calibratio
 For studies with many runs the per-run calibration tables are retained, while plots
 avoid drawing dozens of overlapping individual-run curves.
 
+## Production target composition
+
+The canonical production target set contains **1,000 precursors from exactly 250 proteins**, with **4 selected precursors per protein**. The target set is frozen from the TimSim blueprint before condition effects or replicate-specific abundance changes are generated.
+
+Eligibility thresholds are unchanged from the blueprint high-signal selector. For each protein, the selector first retains a 2× shortlist by simulator signal quality, then chooses the final four using fragment-collision specificity computed from the complete blueprint fragment geometry. OpenDIA output and observed raw intensity are forbidden selection inputs.
+
+The generated manifest records `selection.mode=protein_balanced`, `target_proteins`, `precursors_per_protein`, and the fixed collision-specificity geometry. `validate_study.py` requires the selected table to contain exactly the declared protein count and exactly the declared precursor multiplicity for every protein. If the blueprint cannot satisfy the contract, generation stops before biological runs are simulated.
+
+Before the 25+25 production run, generate a fresh 3+3 study with this final target-selection policy and rerun the isolated target-only and independent-entrapment lanes.
+
 ## Re-benchmark completed OpenDIA lanes
 
 OpenDIA execution and report generation are separate steps. If

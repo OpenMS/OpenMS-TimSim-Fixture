@@ -216,31 +216,41 @@ This sweep remains diagnostic only. Canonical benchmark extraction or OpenDIA pa
 not be tuned to maximize agreement with the oracle. The raw oracle continues to serve only as
 a measurement-model diagnostic alongside biological/design truth and OpenDIA output.
 
-## Current next step — production target-selection contract
+## Production target-selection contract — implemented
 
-The measurement-model gate is now closed. The next implementation should finalize the canonical
-1,000-target production composition around **multiple simulator-only selected precursors per
-protein**, rather than the current ~600-protein composition with many singletons. The 3+3
-diagnostic already showed:
+The canonical multi-run selector now supports a hard protein-balanced production contract. `generate_study.sh` defaults to:
 
-- one selected precursor/protein: r=0.7001, MAE=0.2942;
-- two selected precursors/protein: r=0.8586, MAE=0.1471;
-- three or more selected precursors/protein: r=0.9899, MAE=0.0528.
+- selection mode: `protein_balanced`;
+- 250 selected proteins;
+- exactly 4 frozen precursor groups per selected protein;
+- 1,000 true target precursors total;
+- 1,000 independent entrapments.
 
-Preferred production objective: approximately **250 proteins × 4 high-quality precursors/protein
-= 1,000 target precursors**, selected entirely from the TimSim blueprint before treatment effects,
-replicate perturbations, raw measurements, or OpenDIA results exist. Selection should retain the
-existing high-signal criteria and incorporate simulator-only fragment-collision specificity so
-protein-level redundancy and assay cleanliness are explicit properties of the frozen benchmark.
+Blueprint high-signal eligibility thresholds are unchanged. For each protein, the selector first forms a 2× shortlist using simulator signal quality, then chooses the final four by simulator-only fragment-collision specificity. The collision model uses the complete TimSim blueprint fragment universe and the fixed geometry established by the diagnostic sweep (6 s RT, 0.03 1/K0, 25 ppm; top four fragments summarized). OpenDIA outputs and observed raw intensities are not selection inputs.
 
-Execution plan:
+Protein selection is balanced across RT, precursor m/z, ion mobility, charge, and SWATH window geometry. `validate_study.py` now fails closed unless the selected table exactly matches the manifest-declared protein count and precursor multiplicity, and requires the simulator-only specificity/protein-rank provenance columns.
 
-1. implement the multi-precursor-per-protein selector and validation contract;
-2. generate a fresh 3 control + 3 treatment production-design validation using that selector;
-3. require 1,000 targets, the intended per-protein precursor multiplicity, complete structural
-   truth validation, stable external-null calibration, and acceptable ID/quantification behavior;
-4. only after that checkpoint, generate the canonical 25 control + 25 treatment study with
-   1,000 targets and 1,000 independent entrapments.
+The implementation includes focused tests for:
 
-Repository sweep implementation checkpoint: commit `a4fd392` added the sweep; the subsequent
-`PrecursorMz` merge hotfix completed before the successful run.
+- signal gating before collision-specificity selection;
+- geometric collision counting;
+- exact protein-balanced precursor multiplicity;
+- fail-closed study validation;
+- production defaults/provenance in `generate_study.sh`.
+
+The implementation adds four focused production-selector tests. The complete current checkout should report **30 passing tests** after the overlay is applied; local source-overlay validation also includes Python compilation, shell syntax, and whitespace checks.
+
+## Current next step — final 3+3 production-design validation
+
+Generate a **fresh** 3 control + 3 treatment study using the final 250×4 selector. Do not reuse the earlier `validation_3x3` target set because it was frozen under the global precursor selector.
+
+Required first checkpoint is the blueprint selection stage itself:
+
+- exactly 1,000 targets;
+- exactly 250 proteins;
+- exactly 4 precursors/protein;
+- zero singleton/doubleton/tripleton selected proteins;
+- selection remains blueprint-only and OpenDIA-independent.
+
+If fewer than 250 proteins have four eligible precursor groups, increase `--simulated-peptides` and `--fasta-peptides`; do not weaken high-signal thresholds. Once the fresh 3+3 study passes structural validation, run the existing isolated target-only and independent-entrapment OpenDIA lanes and compare identification, FDR, and protein quantitative recovery. If that passes, generate the canonical 25+25 study without further architecture changes.
+

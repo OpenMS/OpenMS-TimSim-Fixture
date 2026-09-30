@@ -4,6 +4,10 @@ import importlib.util
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -303,6 +307,11 @@ def test_multirun_study_defaults_and_dynamic_opendia_contract() -> None:
     assert "CONTROL_RUNS=25" in study
     assert "TREATMENT_RUNS=25" in study
     assert "PRECURSORS=1000" in study
+    assert "TARGET_PROTEINS=250" in study
+    assert "PRECURSORS_PER_PROTEIN=4" in study
+    assert "SELECTION_MODE=protein_balanced" in study
+    assert '"mode": ${SELECTION_MODE@Q}' in study
+    assert '"target_proteins": int(${TARGET_PROTEINS@Q})' in study
     assert "ENTRAPMENTS=1000" in study
     assert "SIMULATED_PEPTIDES=10000" in study
     assert "FASTA_PEPTIDES=20000" in study
@@ -762,3 +771,140 @@ def test_raw_oracle_sweep_runner_is_postprocess_only_and_uses_project_python() -
     assert "0.01,0.02,0.03" in runner
     assert "10,15,25" in runner
     assert "8,6,4,3" in runner
+
+
+
+def _production_row(protein: str, idx: int, signal: float, competitors: int) -> dict:
+    return {
+        "precursor_key": f"{protein}_PEP{idx}/2",
+        "sequence": f"{protein}_PEP{idx}",
+        "protein_id": protein,
+        "charge": 2,
+        "min_realized_event_proxy": signal,
+        "min_ion_relative_abundance": 0.5,
+        "total_fragment_intensity": 1000.0 + idx,
+        "rt_bin": idx % 5,
+        "mz_bin": (idx + 1) % 5,
+        "im_bin": (idx + 2) % 5,
+        "swath_window_index": idx % 4,
+        "specificity_collision_free_fragments": 8 if competitors == 0 else 4,
+        "specificity_all_competitor_precursors_sum": competitors * 2,
+        "specificity_all_collision_count_sum": competitors * 2,
+        "specificity_all_collision_predicted_intensity": float(competitors * 200),
+        "specificity_top_fragments": 4,
+        "specificity_top_competitor_precursors_sum": competitors,
+        "specificity_top_collision_count_sum": competitors,
+        "specificity_top_collision_predicted_intensity": float(competitors * 100),
+    }
+
+
+def test_production_precursor_shortlist_is_signal_gated_before_specificity() -> None:
+    module = load_tool("select_reference_precursors")
+    rows = [
+        _production_row("P1", idx, 1000.0 - 50.0 * idx, 7 - idx if idx < 8 else 0)
+        for idx in range(9)
+    ]
+    selected = module._protein_precursor_shortlist(rows, 4, 2)
+    keys = {row["precursor_key"] for row in selected}
+    assert len(selected) == 4
+    # P1_PEP8 is collision-free but outside the strongest 2x signal shortlist.
+    assert "P1_PEP8/2" not in keys
+    assert all(row["protein_precursor_rank"] in {1, 2, 3, 4} for row in selected)
+
+
+def test_blueprint_collision_specificity_counts_only_geometric_competitors() -> None:
+    module = load_tool("select_reference_precursors")
+    candidate = SimpleNamespace(
+        sequence="TARGETK",
+        precursor_charge=2,
+        rt_seconds=100.0,
+        precursor_im=1.0,
+        fragments=[
+            {"mz": 500.0, "intensity": 100.0},
+            {"mz": 600.0, "intensity": 80.0},
+        ],
+    )
+    background = {
+        1: (
+            [500.0, 500.004, 600.0, 600.002],
+            [
+                (500.0, 100.0, 1.0, "TARGETK/2", 100.0),
+                (500.004, 101.0, 1.005, "COMP1/2", 50.0),
+                (600.0, 100.0, 1.0, "TARGETK/2", 80.0),
+                (600.002, 120.0, 1.005, "TOO_FAR_RT/2", 60.0),
+            ],
+        )
+    }
+    metric = module._specificity_metrics(
+        candidate,
+        1,
+        background,
+        max_rt_seconds=6.0,
+        max_im_1_over_k0=0.03,
+        max_fragment_ppm=25.0,
+        top_fragments=2,
+    )
+    assert metric["specificity_collision_free_fragments"] == 1
+    assert metric["specificity_top_competitor_precursors_sum"] == 1
+    assert metric["specificity_top_collision_count_sum"] == 1
+
+
+def test_balanced_protein_selection_returns_exact_multiplicity() -> None:
+    module = load_tool("select_reference_precursors")
+    rows = []
+    for protein_index, protein in enumerate(("P1", "P2", "P3")):
+        for idx in range(6):
+            rows.append(
+                _production_row(
+                    protein,
+                    idx,
+                    2000.0 - protein_index * 50.0 - idx * 20.0,
+                    idx % 3,
+                )
+            )
+    selected, metadata = module._balanced_protein_select(
+        rows,
+        target_proteins=2,
+        precursors_per_protein=4,
+        shortlist_multiplier=2,
+    )
+    counts = pd.Series([row["protein_id"] for row in selected]).value_counts()
+    assert len(selected) == 8
+    assert len(counts) == 2
+    assert counts.eq(4).all()
+    assert metadata["proteins_with_required_precursors"] == 3
+    assert {row["selection_rank"] for row in selected} == set(range(1, 9))
+
+
+def test_protein_balanced_study_validator_enforces_exact_contract() -> None:
+    module = load_tool("validate_study")
+    rows = []
+    for protein_rank, protein in enumerate(("P1", "P2"), start=1):
+        for precursor_rank in range(1, 5):
+            rows.append(
+                {
+                    "protein_id": protein,
+                    "precursor_key": f"{protein}_{precursor_rank}/2",
+                    "protein_selection_rank": protein_rank,
+                    "protein_precursor_rank": precursor_rank,
+                    "specificity_collision_free_fragments": 4,
+                    "specificity_all_competitor_precursors_sum": 0,
+                    "specificity_all_collision_count_sum": 0,
+                    "specificity_top_fragments": 4,
+                    "specificity_top_competitor_precursors_sum": 0,
+                    "specificity_top_collision_count_sum": 0,
+                }
+            )
+    selected = pd.DataFrame(rows)
+    manifest = {
+        "requested_precursors": 8,
+        "selection": {
+            "mode": "protein_balanced",
+            "target_proteins": 2,
+            "precursors_per_protein": 4,
+        },
+    }
+    module.validate_protein_selection_contract(selected, manifest)
+    broken = selected.iloc[:-1].copy()
+    with pytest.raises(SystemExit, match="exactly 4 precursors/protein"):
+        module.validate_protein_selection_contract(broken, manifest)
