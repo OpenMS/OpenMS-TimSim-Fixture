@@ -685,6 +685,45 @@ def test_raw_oracle_sweep_transition_grid_is_nested() -> None:
     assert grid[2, 1] == 35.0
 
 
+
+def test_raw_oracle_specificity_reference_merge_handles_library_precursor_mz() -> None:
+    import pandas as pd
+
+    sweep = load_tool("sweep_raw_signal_oracle")
+    library = pd.DataFrame(
+        [
+            {
+                "PeptideSequence": "TARGET",
+                "PrecursorCharge": 2,
+                "PrecursorMz": 500.0,
+                "ProductMz": 600.0,
+                "TransitionGroupId": "TARGET/2",
+                "TransitionOrdinal": 1,
+                "LibraryIntensity": 1.0,
+            }
+        ]
+    )
+    reference = pd.DataFrame(
+        [
+            {
+                "PeptideSequence": "TARGET",
+                "PrecursorCharge": 2,
+                "PrecursorMz": 500.0,
+                "ReferenceRT": 100.0,
+                "ReferenceIM": 1.0,
+            }
+        ]
+    )
+
+    merged = sweep.merge_library_reference_coordinates(library, reference)
+
+    assert "PrecursorMz" in merged.columns
+    assert "LibraryPrecursorMz" in merged.columns
+    assert "PrecursorMz_x" not in merged.columns
+    assert "PrecursorMz_y" not in merged.columns
+    assert merged.loc[0, "PrecursorMz"] == 500.0
+    assert merged.loc[0, "LibraryPrecursorMz"] == 500.0
+
 def test_raw_oracle_specificity_collision_metric_excludes_same_precursor() -> None:
     import pandas as pd
 

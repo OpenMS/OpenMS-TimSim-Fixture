@@ -172,11 +172,15 @@ compression relative to simulator input. The remaining scientific question is wh
 the raw attenuation is expected DIA cofragmentation/interference captured by the oracle,
 or a nonlinear/raw-response property of the simulator itself.
 
-## Current next step — interference sensitivity sweep implemented, run pending
+## Current next step — interference sensitivity sweep hotfix, rerun pending
 
-The raw-oracle sensitivity/interference decomposition is now implemented and is the final
-measurement-model gate before changing the canonical 25+25 target composition. No TimSim
-or OpenDIA rerun is required.
+The raw-oracle sensitivity/interference decomposition is implemented and remains the final
+measurement-model gate before changing the canonical 25+25 target composition. The first
+run against the real transition-library schema exposed a pandas merge-column collision:
+both the transition library and reference-coordinate table contain `PrecursorMz`, causing
+the merged columns to be suffixed and the specificity ranker to fail before raw-data
+scanning. The merge now preserves the library value as `LibraryPrecursorMz` and uses the
+canonical reference value as `PrecursorMz`. No TimSim or OpenDIA rerun is required.
 
 New implementation:
 
@@ -200,7 +204,8 @@ Transition ranking uses only simulator/acquisition geometry and predicted fragme
 OpenDIA scores, coordinates, q-values, intensities, and raw observed intensity are excluded
 from ranking.
 
-Repository validation after implementation: **25 tests passed**, Python compilation passed,
+Repository validation after the schema-collision hotfix: **26 tests passed**, including a
+regression test where both merge inputs contain `PrecursorMz`; Python compilation passed,
 and all shell scripts passed `bash -n`.
 
 Run the sweep on the existing 3+3 study:
@@ -226,4 +231,3 @@ The production protein-level benchmark should still move toward a simulator-only
 contract with multiple high-quality precursors per protein. The current 3+ precursor stratum
 already shows near-ideal protein effect recovery and should guide the final 1,000-precursor
 composition after this sweep result is known.
-

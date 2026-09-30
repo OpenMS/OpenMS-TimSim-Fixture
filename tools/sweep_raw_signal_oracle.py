@@ -180,6 +180,32 @@ def collision_metrics_for_transition(
     )
 
 
+def merge_library_reference_coordinates(
+    library: pd.DataFrame, reference: pd.DataFrame
+) -> pd.DataFrame:
+    """Attach canonical reference precursor coordinates without pandas suffix collisions."""
+    keys = ["PeptideSequence", "PrecursorCharge"]
+    left = library.copy()
+    if "PrecursorMz" in left.columns:
+        left = left.rename(columns={"PrecursorMz": "LibraryPrecursorMz"})
+    merged = left.merge(
+        reference,
+        on=keys,
+        how="left",
+        validate="many_to_one",
+    )
+    required = ["PrecursorMz", "ReferenceRT", "ReferenceIM"]
+    missing = [column for column in required if column not in merged.columns]
+    if missing:
+        raise RuntimeError(
+            "Reference-coordinate merge did not produce required columns: "
+            + ", ".join(missing)
+        )
+    if merged[required].isna().any().any():
+        raise RuntimeError("Could not map all target transitions to reference RT/IM coordinates")
+    return merged
+
+
 def rank_transition_specificity(
     study: Path,
     library: pd.DataFrame,
@@ -189,14 +215,7 @@ def rank_transition_specificity(
     max_ppm: float,
 ) -> pd.DataFrame:
     reference = load_reference_coordinates(study)
-    merged = library.merge(
-        reference,
-        on=["PeptideSequence", "PrecursorCharge"],
-        how="left",
-        validate="many_to_one",
-    )
-    if merged[["PrecursorMz", "ReferenceRT", "ReferenceIM"]].isna().any().any():
-        raise RuntimeError("Could not map all target transitions to reference RT/IM coordinates")
+    merged = merge_library_reference_coordinates(library, reference)
 
     blueprint = blueprint_db_path(study)
     min_mz = max(1.0, float(merged["ProductMz"].min()) - 5.0)
