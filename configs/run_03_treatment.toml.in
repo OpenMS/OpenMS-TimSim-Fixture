@@ -1,0 +1,51 @@
+# Run 3 reuses run 1's exact molecular blueprint. Its source database contains
+# coherent protein-level treatment changes plus modest sample variation.
+[paths]
+save_path = "@OUTPUT_ROOT@"
+reference_path = "@REFERENCE_D@"
+fasta_path = "@FASTA@"
+existing_path = "@TREATMENT_EXISTING_PATH@"
+
+[experiment]
+experiment_name = "OpenSwathTimSim_03_treatment"
+acquisition_type = "DIA"
+gradient_length = @GRADIENT_LENGTH@
+use_reference_layout = true
+reference_in_memory = false
+use_bruker_sdk = false
+apply_fragmentation = true
+sample_seed = @SAMPLE_SEED@
+from_existing = true
+silent_mode = false
+
+[modifications]
+modifications = "@MODIFICATIONS@"
+
+[models]
+rt_model = "local"
+ccs_model = "local"
+intensity_model = "local"
+
+[variation]
+re_scale_rt = false
+
+[noise]
+noise_frame_abundance = false
+noise_scan_abundance = false
+mz_noise_precursor = false
+mz_noise_fragment = false
+add_real_data_noise = false
+superimpose_on_reference = false
+down_sample_factor = 0.0
+
+[performance]
+use_gpu = false
+num_threads = @TIMSIM_THREADS@
+batch_size = @BATCH_SIZE@
+frame_batch_size = @FRAME_BATCH_SIZE@
+
+[provenance]
+emit_provenance = false
+
+[video_settings]
+generate_preview_video = false

@@ -1,0 +1,4 @@
+# Keep this fixture chemically simple and deterministic.
+[variable_modifications]
+
+[static_modifications]

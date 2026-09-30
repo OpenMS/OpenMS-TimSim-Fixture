@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+
+# Generated fixtures and OpenDIA outputs belong outside the repository.
+fixtures/
+benchmarks/
+results/
+*.d/
