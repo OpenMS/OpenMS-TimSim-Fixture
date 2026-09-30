@@ -252,6 +252,16 @@ RAW_ORACLE_PROBE_ONLY=1 ./scripts/run_raw_signal_oracle.sh \
 
 The oracle integrates frozen library fragments directly from the generated Bruker raw data at simulator-realized RT/IM coordinates. It is diagnostic only: OpenDIA-selected coordinates, scores, and peak boundaries are excluded from oracle extraction and oracle results never feed back into target selection.
 
+To determine whether raw-oracle attenuation is caused by DIA cofragmentation/interference rather than an upstream simulator response, run the fixed interference-sensitivity sweep on the same completed 3+3 study:
+
+```bash
+./scripts/run_raw_signal_oracle_sweep.sh \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3"
+```
+
+The sweep scans each raw run once while evaluating 144 fixed configurations: RT half-windows of 1/2/4/6 s, IM half-windows of 0.01/0.02/0.03 1/K0, fragment tolerances of 10/15/25 ppm, and all-8/top-6/top-4/top-3 transition subsets. Transition specificity is ranked only from collision geometry in the complete TimSim blueprint fragment universe; OpenDIA and raw intensity are not used to rank transitions.
+
 For the production 25+25 study, omit the run-count overrides only after the study validation gates are satisfied:
 
 ```bash
@@ -274,7 +284,7 @@ Fast repository tests do not require generating a complete TimSim run:
 .venv/bin/python -m pytest
 ```
 
-They cover synthetic FASTA replay, tryptic peptide construction, condition-coordinate preservation, noise-free TimSim templates, fixture-manifest contracts, OpenDIA intermediate retention, entrapment construction, and isolated benchmark lanes.
+They cover synthetic FASTA replay, tryptic peptide construction, condition-coordinate preservation, noise-free TimSim templates, fixture-manifest contracts, OpenDIA intermediate retention, entrapment construction, isolated benchmark lanes, raw-oracle extraction, and interference-sweep contracts.
 
 ## Design notes
 

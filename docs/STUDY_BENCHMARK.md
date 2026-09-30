@@ -168,4 +168,46 @@ sequence-specific fragment yield cancels within a precursor across runs.
 
 The oracle is strictly diagnostic. It must never be used to select benchmark targets,
 construct the assay library, choose entrapments, or tune OpenDIA on the canonical fixture.
+## Raw-oracle interference sensitivity sweep
+
+After the single-window raw oracle, use `run_raw_signal_oracle_sweep.sh` to distinguish
+DIA cofragmentation/interference from persistent simulator/raw-response compression. The
+sweep does not regenerate TimSim data and does not rerun OpenDIA. Each `.d` file is read
+once while all declared extraction combinations are accumulated in parallel.
+
+Default grid:
+
+- RT half-window: 1, 2, 4, 6 s;
+- ion-mobility half-window: 0.01, 0.02, 0.03 1/K0;
+- fragment tolerance: 10, 15, 25 ppm;
+- transition subset: all 8, top 6, top 4, top 3 most specific transitions.
+
+Run it on an already completed study benchmark:
+
+```bash
+./scripts/run_raw_signal_oracle_sweep.sh STUDY_DIR BENCH_DIR
+```
+
+Transition specificity is independent of OpenDIA and observed raw intensity. The tool reads
+the complete TimSim blueprint fragment universe and counts geometrically plausible fragment
+collisions within the maximum sweep RT/IM/mass windows for each frozen target transition.
+Within each target, lower collision burden ranks as more specific, with predicted target
+fragment intensity used only as a deterministic tie-breaker.
+
+Primary outputs under `results/raw_signal_oracle_sweep/` are:
+
+- `transition_specificity.tsv`;
+- `sweep_summary.tsv`;
+- `sweep_factor_summary.tsv`;
+- `sweep_measurements.tsv.gz`;
+- `sweep_summary.json`;
+- `raw_oracle_sweep_report.md`.
+
+The report compares the original broad/all-transition oracle against a predeclared tight
+configuration (1 s, 0.01 1/K0, 10 ppm, top 4 transitions). A systematic movement of both
+event-proxy→raw and realized-effect→raw slopes toward one as extraction becomes tighter
+and less collision-prone supports DIA interference as the source of attenuation. Persistent
+compression in the tight configuration points upstream toward TimSim fragment/raw response
+and should be resolved before the canonical 25+25 study. OpenDIA agreement is reported as
+a downstream check, not as a criterion for choosing extraction parameters.
 

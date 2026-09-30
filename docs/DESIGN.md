@@ -147,3 +147,11 @@ entrapment construction, or canonical OpenDIA parameters. This keeps the oracle 
 for locating quantitative response compression without turning raw truth into an
 analysis-time oracle.
 
+The interference-sensitivity sweep preserves the same rule. It evaluates a fixed extraction
+grid on already generated raw files and ranks transition subsets from collision geometry in
+the complete TimSim blueprint fragment universe. Transition ranks are determined from
+precursor window group, RT/IM proximity, fragment m/z proximity, and predicted fragment
+intensity only. Raw observed intensity and OpenDIA output are excluded from specificity
+ranking. Sweep results are diagnostic evidence about cofragmentation and must not be used
+to tune canonical OpenDIA parameters.
+

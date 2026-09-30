@@ -646,3 +646,80 @@ def test_raw_oracle_runner_is_postprocess_only_and_uses_project_python() -> None
     assert "benchmark_raw_signal_oracle.py" in runner
     assert "run_opendia.sh" not in runner
     assert "generate_study.sh" not in runner
+
+
+def test_raw_oracle_sweep_grid_has_expected_144_configurations() -> None:
+    sweep = load_tool("sweep_raw_signal_oracle")
+    rows = sweep.configuration_rows(
+        sweep.DEFAULT_RT_WINDOWS,
+        sweep.DEFAULT_IM_WINDOWS,
+        sweep.DEFAULT_PPM_WINDOWS,
+        sweep.DEFAULT_SUBSETS,
+    )
+    assert len(rows) == 4 * 3 * 3 * 4 == 144
+    assert any(row["ConfigId"] == "rt6_im0.03_ppm25_top8" for row in rows)
+    assert any(row["ConfigId"] == "rt1_im0.01_ppm10_top4" for row in rows)
+
+
+def test_raw_oracle_sweep_transition_grid_is_nested() -> None:
+    import numpy as np
+
+    sweep = load_tool("sweep_raw_signal_oracle")
+    mz = np.array([499.996, 500.000, 500.008, 500.020], dtype=float)
+    intensity = np.array([5.0, 10.0, 20.0, 40.0], dtype=float)
+    mobility = np.array([1.000, 1.005, 1.018, 1.040], dtype=float)
+    grid = sweep.integrate_transition_grid(
+        mz,
+        intensity,
+        mobility,
+        product_mz=500.0,
+        target_im=1.0,
+        ppm_windows=(10.0, 15.0, 25.0),
+        im_windows=(0.01, 0.02, 0.03),
+    )
+    assert grid.shape == (3, 3)
+    # Every wider mass/mobility window must contain at least as much signal.
+    assert np.all(np.diff(grid, axis=0) >= 0)
+    assert np.all(np.diff(grid, axis=1) >= 0)
+    assert grid[0, 0] == 15.0
+    assert grid[2, 1] == 35.0
+
+
+def test_raw_oracle_specificity_collision_metric_excludes_same_precursor() -> None:
+    import pandas as pd
+
+    sweep = load_tool("sweep_raw_signal_oracle")
+    background = pd.DataFrame(
+        [
+            {"PrecursorKey": "TARGET/2", "RT": 100.0, "IM": 1.0, "ProductMz": 500.0, "PredictedIntensity": 100.0},
+            {"PrecursorKey": "COMP1/2", "RT": 101.0, "IM": 1.005, "ProductMz": 500.004, "PredictedIntensity": 20.0},
+            {"PrecursorKey": "COMP2/2", "RT": 120.0, "IM": 1.005, "ProductMz": 500.003, "PredictedIntensity": 30.0},
+        ]
+    )
+    count, competitors, intensity, nearest_ppm = sweep.collision_metrics_for_transition(
+        500.0,
+        "TARGET/2",
+        100.0,
+        1.0,
+        1,
+        background,
+        max_rt=6.0,
+        max_im=0.03,
+        max_ppm=25.0,
+    )
+    assert count == 1
+    assert competitors == 1
+    assert intensity == 20.0
+    assert 7.9 < nearest_ppm < 8.1
+
+
+def test_raw_oracle_sweep_runner_is_postprocess_only_and_uses_project_python() -> None:
+    runner = (ROOT / "scripts" / "run_raw_signal_oracle_sweep.sh").read_text(encoding="utf-8")
+    assert 'PYTHON="$FIXTURE_VENV/bin/python"' in runner
+    assert "sweep_raw_signal_oracle.py" in runner
+    assert "run_opendia.sh" not in runner
+    assert "generate_study.sh" not in runner
+    assert "1,2,4,6" in runner
+    assert "0.01,0.02,0.03" in runner
+    assert "10,15,25" in runner
+    assert "8,6,4,3" in runner

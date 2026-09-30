@@ -172,27 +172,58 @@ compression relative to simulator input. The remaining scientific question is wh
 the raw attenuation is expected DIA cofragmentation/interference captured by the oracle,
 or a nonlinear/raw-response property of the simulator itself.
 
-## Current next step
+## Current next step — interference sensitivity sweep implemented, run pending
 
-Before generating the full 25+25 production study, run an oracle sensitivity/interference
-decomposition on the existing 3+3 raw files. No TimSim or OpenDIA rerun is required.
+The raw-oracle sensitivity/interference decomposition is now implemented and is the final
+measurement-model gate before changing the canonical 25+25 target composition. No TimSim
+or OpenDIA rerun is required.
 
-The next diagnostic should evaluate the same raw data across multiple truth-centered
-extraction windows and transition subsets, for example:
+New implementation:
+
+- `tools/sweep_raw_signal_oracle.py`;
+- `scripts/run_raw_signal_oracle_sweep.sh`;
+- simulator-only transition-specificity ranking against the complete TimSim blueprint
+  fragment universe;
+- single-pass accumulation of the complete fixed sweep grid;
+- machine-readable and Markdown summaries comparing broad/all-transition and
+  tight/high-specificity extraction.
+
+Default fixed grid:
 
 - RT half-windows: 1, 2, 4, and 6 s;
 - IM half-windows: 0.01, 0.02, and 0.03 1/K0;
-- fragment ppm windows: 10, 15, and 25 ppm;
-- all eight transitions versus high-specificity / low-collision transition subsets.
+- fragment tolerances: 10, 15, and 25 ppm;
+- transition subsets: all 8, top 6, top 4, and top 3 by blueprint collision specificity.
 
-For each configuration, report event-proxy -> raw and raw -> OpenDIA slopes/correlations,
-plus condition-effect slopes. If event-proxy -> raw approaches unit slope as extraction
-becomes more specific, the attenuation is primarily cofragmentation/interference and the
-current biological design is suitable for scaling. If the slope remains near ~0.65 across
-tight, specific windows, inspect TimSim's target-attributable fragment generation / raw
-response before producing the 25+25 canonical benchmark.
+This yields 144 diagnostic configurations while reading each generated `.d` run only once.
+Transition ranking uses only simulator/acquisition geometry and predicted fragment intensity;
+OpenDIA scores, coordinates, q-values, intensities, and raw observed intensity are excluded
+from ranking.
 
-The production protein-level benchmark should also use a simulator-only target-selection
-contract that yields multiple high-quality precursors per protein. The current 3+
-precursor stratum already shows near-ideal protein effect recovery and should guide the
-final 1,000-precursor composition.
+Repository validation after implementation: **25 tests passed**, Python compilation passed,
+and all shell scripts passed `bash -n`.
+
+Run the sweep on the existing 3+3 study:
+
+```bash
+./scripts/run_raw_signal_oracle_sweep.sh \
+  /home/sing/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3 \
+  /home/sing/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3
+```
+
+Decision gate:
+
+- if the tight/top-4 configuration moves both event-proxy -> raw and realized-effect -> raw
+  slopes substantially toward one, treat the broad-oracle attenuation as primarily DIA
+  cofragmentation/interference and proceed to finalize the production target-selection
+  contract;
+- if both tight slopes remain <=~0.75, inspect TimSim target-attributable fragment/raw
+  response before producing the 25+25 canonical benchmark;
+- mixed behavior should be resolved from `sweep_factor_summary.tsv` and
+  `transition_specificity.tsv` rather than by tuning against OpenDIA performance.
+
+The production protein-level benchmark should still move toward a simulator-only selection
+contract with multiple high-quality precursors per protein. The current 3+ precursor stratum
+already shows near-ideal protein effect recovery and should guide the final 1,000-precursor
+composition after this sweep result is known.
+
