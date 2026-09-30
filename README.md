@@ -196,6 +196,43 @@ Current smoke-scale observations:
 
 Fifty external negatives are sufficient for a smoke test but not for a precise 1% FDR estimate; larger fixtures and multiple independent realizations are required for calibration studies.
 
+## Multi-run study benchmark
+
+For a replicate-aware benchmark, use `generate_study.sh`. The canonical larger study is **25 control + 25 treatment runs**, with **1,000 frozen targets** and **1,000 independent entrapments**. Targets are selected from a separate TimSim blueprint before treatment effects or replicate abundance variation are created.
+
+Validate the architecture first with 3+3 runs at the full library size:
+
+```bash
+./scripts/generate_study.sh \
+  --reference /absolute/path/to/reference.d \
+  --output "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
+  --control-runs 3 \
+  --treatment-runs 3 \
+  --precursors 1000 \
+  --entrapments 1000 \
+  --simulated-peptides 10000 \
+  --fasta-peptides 20000
+```
+
+Then benchmark the two isolated OpenDIA lanes:
+
+```bash
+export OPENMS_BUILD=/path/to/OpenMS-build
+THREADS=12 ./scripts/run_study_benchmark_lanes.sh \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3"
+```
+
+The study records three quantitative truth layers: predeclared protein `DesignLog2FC`, per-run realized TimSim input abundance, and post-simulation realized precursor truth. This separates finite-cohort biological variation from OpenDIA measurement error. See `docs/STUDY_BENCHMARK.md` for the full design.
+
+For the production 25+25 study, omit the run-count overrides:
+
+```bash
+./scripts/generate_study.sh \
+  --reference /absolute/path/to/reference.d \
+  --output "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/control25_treatment25_targets1000"
+```
+
 ## Reproducibility policy
 
 The synthetic-proteome seed is separate from the simulation seed so multiple synthetic DIA realizations can reuse the same peptide universe. TimSim's `sample_seed`, condition perturbation seed, software versions, and truth hashes are written to the fixture manifest.

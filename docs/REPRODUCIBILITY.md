@@ -54,3 +54,15 @@ The raw `.d` byte stream may be tested separately if exact binary replay is requ
 ## Reference data
 
 The reference `.d` is required for acquisition geometry. Canonical configs explicitly disable real-data superposition/noise. The reference dataset itself should therefore be tracked by an external immutable identifier or checksum in any published/CI fixture deployment.
+
+## Multi-run study seed plan
+
+Multi-run studies use seed-plan version 3. The synthetic FASTA seed, blueprint TimSim
+seed, study biological-variation seed, entrapment seed, and per-run TimSim child seeds
+are separate. `OpenSwathTimSim.study_manifest.tsv` records each run's TimSim and
+abundance seed, and `fixture_manifest.json` records the study-level seeds and hashes of
+all major truth/library artifacts.
+
+Reusing the same seeds and pinned simulator version is expected to reproduce the same
+study design and source abundance databases. Reproducibility of generated TDF signal is
+validated end-to-end rather than maintained through local simulator patches.

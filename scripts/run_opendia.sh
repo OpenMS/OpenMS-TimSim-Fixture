@@ -18,9 +18,18 @@ LIBRARY_TSV="${3:-${OPENDIA_LIBRARY:-$BUILD_DIR/OpenSwathTimSim.transitions.tsv}
 [[ -s "$LIBRARY_TSV" ]] || { echo "ERROR: OpenDIA transition list not found: $LIBRARY_TSV" >&2; exit 1; }
 require_external_output_path "$OUT_DIR" "OpenDIA output directory"
 
+MANIFEST="$BUILD_DIR/fixture_manifest.json"
+[[ -s "$MANIFEST" ]] || { echo "ERROR: fixture manifest not found: $MANIFEST" >&2; exit 1; }
+EXPECTED_RUNS="$(python3 - "$MANIFEST" <<'PYMANIFEST'
+import json, sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+print(len(manifest.get("runs", [])))
+PYMANIFEST
+)"
+[[ "$EXPECTED_RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: fixture manifest contains no runs" >&2; exit 1; }
 mapfile -t TDF_INPUTS < <(find "$BUILD_DIR/tdfs" -maxdepth 1 -type l -name '*.d' | sort)
-(( ${#TDF_INPUTS[@]} == 3 )) || {
-  echo "ERROR: expected exactly three fixture .d inputs under $BUILD_DIR/tdfs" >&2
+(( ${#TDF_INPUTS[@]} == EXPECTED_RUNS )) || {
+  echo "ERROR: expected $EXPECTED_RUNS fixture .d inputs under $BUILD_DIR/tdfs; found ${#TDF_INPUTS[@]}" >&2
   exit 1
 }
 

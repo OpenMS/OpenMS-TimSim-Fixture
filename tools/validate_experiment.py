@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate that the three TimSim runs form one comparable experiment."""
+"""Validate coordinate identity and abundance variation across TimSim run databases."""
 from __future__ import annotations
 
 import argparse
@@ -28,7 +28,6 @@ def load_run(path: Path) -> tuple[dict[str, tuple[float, float]], dict[tuple[str
     with sqlite3.connect(path) as connection:
         peptide_cols = columns(connection, "peptides")
         ion_cols = columns(connection, "ions")
-
         peptide_id_col = first_present(("peptide_id", "id"), peptide_cols, "peptide ID")
         sequence_col = first_present(("sequence", "peptide"), peptide_cols, "sequence")
         events_col = first_present(("events", "total_events", "abundance"), peptide_cols, "events")
@@ -64,7 +63,6 @@ def load_run(path: Path) -> tuple[dict[str, tuple[float, float]], dict[tuple[str
         for peptide_id, charge, mz, mobility in connection.execute(query):
             sequence = peptides_by_id[int(peptide_id)]
             ions[(sequence, int(charge))] = (float(mz), float(mobility))
-
     return peptides, ions
 
 
@@ -73,70 +71,54 @@ def max_abs(values: list[float]) -> float:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("db", type=Path, nargs=3, metavar=("RUN1_DB", "RUN2_DB", "RUN3_DB"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("db", type=Path, nargs="+", metavar="RUN_DB")
     args = parser.parse_args()
+    if len(args.db) < 2:
+        parser.error("provide at least two run databases")
 
     loaded = [load_run(path) for path in args.db]
     peptide_maps = [item[0] for item in loaded]
     ion_maps = [item[1] for item in loaded]
+    reference_sequences = set(peptide_maps[0])
+    reference_ions = set(ion_maps[0])
+    changed_counts: list[int] = []
 
-    baseline_sequences = set(peptide_maps[0])
-    baseline_ions = set(ion_maps[0])
-    for index in (1, 2):
-        if set(peptide_maps[index]) != baseline_sequences:
-            missing = baseline_sequences - set(peptide_maps[index])
-            extra = set(peptide_maps[index]) - baseline_sequences
-            raise SystemExit(
-                f"Run {index + 1} peptide identities differ: {len(missing)} missing, {len(extra)} extra"
-            )
-        if set(ion_maps[index]) != baseline_ions:
-            missing = baseline_ions - set(ion_maps[index])
-            extra = set(ion_maps[index]) - baseline_ions
-            raise SystemExit(
-                f"Run {index + 1} precursor identities differ: {len(missing)} missing, {len(extra)} extra"
-            )
-
-    for index in (1, 2):
-        rt_delta = [
-            peptide_maps[index][sequence][1] - peptide_maps[0][sequence][1]
-            for sequence in baseline_sequences
-        ]
-        mz_delta = [
-            ion_maps[index][key][0] - ion_maps[0][key][0]
-            for key in baseline_ions
-        ]
-        im_delta = [
-            ion_maps[index][key][1] - ion_maps[0][key][1]
-            for key in baseline_ions
-        ]
+    for index in range(1, len(args.db)):
+        if set(peptide_maps[index]) != reference_sequences:
+            missing = reference_sequences - set(peptide_maps[index])
+            extra = set(peptide_maps[index]) - reference_sequences
+            raise SystemExit(f"Run {index + 1} peptide identities differ: {len(missing)} missing, {len(extra)} extra")
+        if set(ion_maps[index]) != reference_ions:
+            missing = reference_ions - set(ion_maps[index])
+            extra = set(ion_maps[index]) - reference_ions
+            raise SystemExit(f"Run {index + 1} precursor identities differ: {len(missing)} missing, {len(extra)} extra")
+        rt_delta = [peptide_maps[index][sequence][1] - peptide_maps[0][sequence][1] for sequence in reference_sequences]
+        mz_delta = [ion_maps[index][key][0] - ion_maps[0][key][0] for key in reference_ions]
+        im_delta = [ion_maps[index][key][1] - ion_maps[0][key][1] for key in reference_ions]
         if max_abs(rt_delta) > 1e-8:
             raise SystemExit(f"Run {index + 1} changed RT values; max absolute delta={max_abs(rt_delta)}")
         if max_abs(mz_delta) > 1e-8:
             raise SystemExit(f"Run {index + 1} changed precursor m/z; max absolute delta={max_abs(mz_delta)}")
         if max_abs(im_delta) > 1e-8:
             raise SystemExit(f"Run {index + 1} changed ion mobility; max absolute delta={max_abs(im_delta)}")
+        changed_counts.append(sum(
+            peptide_maps[index][sequence][0] != peptide_maps[0][sequence][0]
+            for sequence in reference_sequences
+        ))
 
-    replicate_changed = sum(
-        peptide_maps[1][sequence][0] != peptide_maps[0][sequence][0]
-        for sequence in baseline_sequences
-    )
-    treatment_changed = sum(
-        peptide_maps[2][sequence][0] != peptide_maps[0][sequence][0]
-        for sequence in baseline_sequences
-    )
-    if replicate_changed == 0:
-        raise SystemExit("Run 2 has no abundance changes")
-    if treatment_changed == 0:
-        raise SystemExit("Run 3 has no abundance changes")
-
+    if not any(changed_counts):
+        raise SystemExit("No abundance changes were found across comparison runs")
     print(
-        f"Comparable experiment OK: {len(baseline_sequences)} peptides, "
-        f"{len(baseline_ions)} precursor ions"
+        f"Comparable experiment OK: {len(args.db)} runs, {len(reference_sequences)} peptides, "
+        f"{len(reference_ions)} precursor ions"
     )
-    print(f"RT/mz/IM identities are unchanged across all runs")
-    print(f"Run 2 abundance changes: {replicate_changed}/{len(baseline_sequences)} peptides")
-    print(f"Run 3 abundance changes: {treatment_changed}/{len(baseline_sequences)} peptides")
+    print("RT/mz/IM identities are unchanged across all runs")
+    print(
+        "Abundance changes versus first run: "
+        f"min={min(changed_counts)}, median={sorted(changed_counts)[len(changed_counts)//2]}, max={max(changed_counts)} "
+        f"of {len(reference_sequences)} peptides"
+    )
     return 0
 
 

@@ -1,0 +1,67 @@
+# Generic blueprint simulation for multi-run studies.
+[paths]
+save_path = "@OUTPUT_ROOT@"
+reference_path = "@REFERENCE_D@"
+fasta_path = "@FASTA@"
+
+[experiment]
+experiment_name = "@EXPERIMENT_NAME@"
+acquisition_type = "DIA"
+gradient_length = @GRADIENT_LENGTH@
+use_reference_layout = true
+reference_in_memory = false
+use_bruker_sdk = false
+apply_fragmentation = true
+sample_seed = @SAMPLE_SEED@
+silent_mode = false
+
+[digestion]
+n_proteins = @N_PROTEINS@
+num_peptides_total = @NUM_PEPTIDES_TOTAL@
+num_sample_peptides = @NUM_SAMPLE_PEPTIDES@
+sample_peptides = true
+sample_occurrences = true
+missed_cleavages = 0
+min_len = 7
+max_len = 20
+remove_degenerate_peptides = true
+
+[modifications]
+modifications = "@MODIFICATIONS@"
+
+[models]
+rt_model = "local"
+ccs_model = "local"
+intensity_model = "local"
+
+[charge_states]
+binomial_charge_model = true
+p_charge = 0.8
+min_charge_contrib = 0.005
+max_charge = 3
+normalize_charge_states = true
+charge_state_one_probability = 0.0
+
+[variation]
+re_scale_rt = true
+
+[noise]
+noise_frame_abundance = false
+noise_scan_abundance = false
+mz_noise_precursor = false
+mz_noise_fragment = false
+add_real_data_noise = false
+superimpose_on_reference = false
+down_sample_factor = 0.0
+
+[performance]
+use_gpu = false
+num_threads = @TIMSIM_THREADS@
+batch_size = @BATCH_SIZE@
+frame_batch_size = @FRAME_BATCH_SIZE@
+
+[provenance]
+emit_provenance = false
+
+[video_settings]
+generate_preview_video = false

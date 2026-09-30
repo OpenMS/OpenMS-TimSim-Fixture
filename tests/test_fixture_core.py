@@ -161,3 +161,271 @@ def test_benchmark_lanes_isolate_target_quant_from_entrapment_scoring() -> None:
     assert 'ENTRAPMENT_OPENDIA_DIR="${4:-$TARGET_OPENDIA_DIR}"' in benchmark
     assert '--opendia-dir "$TARGET_OPENDIA_DIR"' in benchmark
     assert '--opendia-dir "$ENTRAPMENT_OPENDIA_DIR"' in benchmark
+
+
+def _make_blueprint_db(path: Path, peptides: int = 30) -> None:
+    with sqlite3.connect(path) as con:
+        con.execute(
+            "CREATE TABLE peptides (peptide_id INTEGER PRIMARY KEY, sequence TEXT, protein TEXT, events REAL, retention_time REAL)"
+        )
+        con.execute(
+            "CREATE TABLE ions (peptide_id INTEGER, charge INTEGER, mz REAL, ion_mobility REAL)"
+        )
+        for i in range(1, peptides + 1):
+            con.execute(
+                "INSERT INTO peptides VALUES (?, ?, ?, ?, ?)",
+                (i, f"STUDYPEPTIDE{i}K", f"P{(i - 1) // 3:03d}", 100000.0 + 100 * i, 10.0 + i / 10),
+            )
+            con.execute(
+                "INSERT INTO ions VALUES (?, ?, ?, ?)",
+                (i, 2 + (i % 2), 450.0 + i, 0.9 + i / 1000),
+            )
+
+
+def test_prepare_study_databases_is_deterministic_and_separates_truth_layers(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint.db"
+    _make_blueprint_db(blueprint)
+
+    def run_once(root: Path) -> tuple[str, str, str]:
+        manifest = root / "study.tsv"
+        design = root / "design.tsv"
+        abundance = root / "abundance.tsv"
+        subprocess.run(
+            [
+                sys.executable,
+                str(TOOLS / "prepare_study_databases.py"),
+                "--blueprint-db", str(blueprint),
+                "--output-root", str(root / "inputs"),
+                "--study-manifest-out", str(manifest),
+                "--design-truth-out", str(design),
+                "--abundance-truth-out", str(abundance),
+                "--control-runs", "2",
+                "--treatment-runs", "2",
+                "--study-seed", "12345",
+                "--sample-seed-base", "20000",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return manifest.read_text(), design.read_text(), abundance.read_text()
+
+    first = run_once(tmp_path / "a")
+    second = run_once(tmp_path / "b")
+
+    import csv
+    manifest_rows = list(csv.DictReader(first[0].splitlines(), delimiter="\t"))
+    manifest_rows_2 = list(csv.DictReader(second[0].splitlines(), delimiter="\t"))
+    stable_columns = ["RunOrdinal", "RunId", "RunName", "Condition", "Replicate", "TimSimSampleSeed", "AbundanceSeed"]
+    assert [[row[column] for column in stable_columns] for row in manifest_rows] == [
+        [row[column] for column in stable_columns] for row in manifest_rows_2
+    ]
+    assert first[1:] == second[1:]
+    design_rows = list(csv.DictReader(first[1].splitlines(), delimiter="\t"))
+    abundance_rows = list(csv.DictReader(first[2].splitlines(), delimiter="\t"))
+    assert [row["RunId"] for row in manifest_rows] == ["C01", "C02", "T01", "T02"]
+    assert {row["Condition"] for row in manifest_rows} == {"control", "treatment"}
+    assert len(design_rows) == 10
+    assert len(abundance_rows) == 30 * 4
+    assert all(float(row["ConditionLog2Effect"]) == 0.0 for row in abundance_rows if row["Condition"] == "control")
+    assert any(float(row["ConditionLog2Effect"]) != 0.0 for row in abundance_rows if row["Condition"] == "treatment")
+
+    # Molecular coordinates are copied unchanged while abundance changes per run.
+    base_coords = None
+    event_vectors = []
+    for row in manifest_rows:
+        db = Path(row["InputDatabase"])
+        with sqlite3.connect(db) as con:
+            coords = con.execute("SELECT peptide_id, sequence, retention_time FROM peptides ORDER BY peptide_id").fetchall()
+            ions = con.execute("SELECT peptide_id, charge, mz, ion_mobility FROM ions ORDER BY peptide_id").fetchall()
+            events = tuple(value[0] for value in con.execute("SELECT events FROM peptides ORDER BY peptide_id"))
+        if base_coords is None:
+            base_coords = (coords, ions)
+        assert (coords, ions) == base_coords
+        event_vectors.append(events)
+    assert len(set(event_vectors)) == 4
+
+
+def test_render_study_configs_supports_arbitrary_run_manifest(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.d"
+    reference.mkdir()
+    fasta = tmp_path / "synthetic.fasta"
+    fasta.write_text(">P\nPEPTIDEK\n", encoding="utf-8")
+    manifest = tmp_path / "study.tsv"
+    rows = [
+        (1, "C01", "OpenSwathTimSim_control_01", "control", 1, 1001),
+        (2, "C02", "OpenSwathTimSim_control_02", "control", 2, 1002),
+        (3, "T01", "OpenSwathTimSim_treatment_01", "treatment", 1, 1003),
+        (4, "T02", "OpenSwathTimSim_treatment_02", "treatment", 2, 1004),
+    ]
+    import csv
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    with manifest.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(["RunOrdinal", "RunId", "RunName", "Condition", "Replicate", "TimSimSampleSeed", "AbundanceSeed", "InputDirectory", "InputDatabase"])
+        for ordinal, run_id, run_name, condition, replicate, sample_seed in rows:
+            input_dir = tmp_path / "inputs" / run_name
+            input_dir.mkdir(parents=True)
+            (input_dir / "synthetic_data.db").touch()
+            writer.writerow([ordinal, run_id, run_name, condition, replicate, sample_seed, sample_seed + 100, input_dir, input_dir / "synthetic_data.db"])
+
+    rendered = tmp_path / "rendered"
+    subprocess.run(
+        [
+            sys.executable,
+            str(TOOLS / "render_study_configs.py"),
+            "--repo-root", str(ROOT),
+            "--output-root", str(tmp_path / "out"),
+            "--rendered-dir", str(rendered),
+            "--reference", str(reference),
+            "--fasta", str(fasta),
+            "--study-manifest", str(manifest),
+            "--blueprint-sample-seed", "999",
+            "--n-proteins", "1",
+            "--num-peptides-total", "1",
+            "--num-sample-peptides", "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    configs = sorted(rendered.glob("*.toml"))
+    assert len(configs) == 5
+    text = "\n".join(path.read_text(encoding="utf-8") for path in configs)
+    assert 'experiment_name = "OpenSwathTimSim_control_01"' in text
+    assert 'experiment_name = "OpenSwathTimSim_treatment_02"' in text
+    assert "add_real_data_noise = false" in text
+    assert "superimpose_on_reference = false" in text
+
+
+def test_multirun_study_defaults_and_dynamic_opendia_contract() -> None:
+    study = (ROOT / "scripts" / "generate_study.sh").read_text(encoding="utf-8")
+    assert "CONTROL_RUNS=25" in study
+    assert "TREATMENT_RUNS=25" in study
+    assert "PRECURSORS=1000" in study
+    assert "ENTRAPMENTS=1000" in study
+    assert "SIMULATED_PEPTIDES=10000" in study
+    assert "FASTA_PEPTIDES=20000" in study
+    assert "select_reference_precursors.py" in study
+    assert "prepare_study_databases.py" in study
+    assert "build_study_realized_truth.py" in study
+
+    opendia = (ROOT / "scripts" / "run_opendia.sh").read_text(encoding="utf-8")
+    assert 'EXPECTED_RUNS="$(python3 - "$MANIFEST"' in opendia
+    assert "expected exactly three fixture" not in opendia
+
+    entrapment = (TOOLS / "benchmark_entrapment.py").read_text(encoding="utf-8")
+    assert "RUN_ROLES =" not in entrapment
+    assert 'run_roles = sorted(str(value) for value in run_best["run_role"].dropna().unique())' in entrapment
+
+
+def test_benchmark_study_separates_design_realized_and_observed_truth(tmp_path: Path) -> None:
+    import csv
+    build = tmp_path / "study"
+    opendia = tmp_path / "opendia"
+    out = tmp_path / "results"
+    build.mkdir(); opendia.mkdir()
+
+    run_rows = [
+        (1, "C01", "OpenSwathTimSim_control_01", "control", 1),
+        (2, "C02", "OpenSwathTimSim_control_02", "control", 2),
+        (3, "T01", "OpenSwathTimSim_treatment_01", "treatment", 1),
+        (4, "T02", "OpenSwathTimSim_treatment_02", "treatment", 2),
+    ]
+    with (build / "OpenSwathTimSim.study_manifest.tsv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(["RunOrdinal", "RunId", "RunName", "Condition", "Replicate"])
+        writer.writerows(run_rows)
+
+    with (build / "OpenSwathTimSim.high_signal_selection.tsv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["selection_rank", "precursor_key", "sequence", "protein_id", "charge"], delimiter="\t")
+        writer.writeheader()
+        writer.writerows([
+            {"selection_rank": 1, "precursor_key": "PEPTIDEAK/2", "sequence": "PEPTIDEAK", "protein_id": "P1", "charge": 2},
+            {"selection_rank": 2, "precursor_key": "PEPTIDEBK/2", "sequence": "PEPTIDEBK", "protein_id": "P2", "charge": 2},
+        ])
+
+    design_rows = [
+        {"ProteinId": "P1", "TreatmentClass": "up", "DesignLog2FC": 1.0, "DesignFoldChange": 2.0},
+        {"ProteinId": "P2", "TreatmentClass": "unchanged", "DesignLog2FC": 0.0, "DesignFoldChange": 1.0},
+    ]
+    with (build / "OpenSwathTimSim.study_design_truth.tsv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(design_rows[0]), delimiter="\t")
+        writer.writeheader(); writer.writerows(design_rows)
+
+    realized_rows = []
+    result_rows = []
+    for _, _, run_name, condition, replicate in run_rows:
+        for sequence, protein, design_fc, control_events, treatment_events, base_intensity in [
+            ("PEPTIDEAK", "P1", 1.0, 100.0, 200.0, 1000.0),
+            ("PEPTIDEBK", "P2", 0.0, 100.0, 100.0, 800.0),
+        ]:
+            events = treatment_events if condition == "treatment" else control_events
+            intensity = base_intensity * (2.0 if sequence == "PEPTIDEAK" and condition == "treatment" else 1.0)
+            realized_rows.append({
+                "selection_rank": 1 if sequence == "PEPTIDEAK" else 2,
+                "precursor_key": f"{sequence}/2",
+                "TransitionGroupId": f"TIMSIM_{sequence}_2",
+                "PeptideSequence": sequence,
+                "PrecursorCharge": 2,
+                "ProteinId": protein,
+                "RunId": run_name,
+                "RunName": run_name,
+                "Condition": condition,
+                "Replicate": replicate,
+                "TreatmentClass": "up" if protein == "P1" else "unchanged",
+                "DesignLog2FC": design_fc,
+                "BaselineEvents": 100.0,
+                "RealizedInputEvents": events,
+                "TotalLog2FactorVsBlueprint": 1.0 if events == 200 else 0.0,
+                "PrecursorMz": 500.0,
+                "AssayRT": 10.0,
+                "AssayIM": 1.0,
+                "PeptideEvents": events,
+                "IonRelativeAbundance": 1.0,
+                "FrameAbundanceSum": 1.0,
+                "ScanAbundanceSum": 1.0,
+                "RealizedEventProxy": events,
+                "RealizedRTApex": 10.0,
+                "RealizedRTCentroid": 10.0,
+                "RealizedIMApexSQLite": 1.0,
+                "RealizedIMCentroidSQLite": 1.0,
+                "FramePoints": 1,
+                "ScanPoints": 1,
+            })
+            result_rows.append({
+                "run_name": run_name,
+                "Sequence": sequence,
+                "Charge": 2,
+                "RT": 10.0,
+                "EXP_IM": 1.0,
+                "Intensity": intensity,
+                "decoy": 0,
+                "m_score": 0.001,
+                "d_score": 5.0,
+            })
+    with (build / "OpenSwathTimSim.realized_truth.tsv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(realized_rows[0]), delimiter="\t")
+        writer.writeheader(); writer.writerows(realized_rows)
+    with (opendia / "OpenDIA.results.tsv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(result_rows[0]), delimiter="\t")
+        writer.writeheader(); writer.writerows(result_rows)
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(TOOLS / "benchmark_study.py"),
+            "--build-dir", str(build),
+            "--opendia-dir", str(opendia),
+            "--out-dir", str(out),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    report = (out / "study_benchmark_report.md").read_text(encoding="utf-8")
+    effects = (out / "peptide_effects.tsv").read_text(encoding="utf-8")
+    assert "design vs realized" in report
+    assert "realized vs OpenDIA" in report
+    assert "PEPTIDEAK" in effects
+    assert "1.0" in effects

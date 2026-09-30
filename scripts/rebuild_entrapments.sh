@@ -28,10 +28,8 @@ esac
 FIXTURE="$(realpath "$FIXTURE")"
 MANIFEST="$FIXTURE/fixture_manifest.json"
 TARGETS="$FIXTURE/OpenSwathTimSim.target_only.transitions.tsv"
-BASE_DB="$FIXTURE/OpenSwathTimSim_01_baseline/synthetic_data.db"
 [[ -f "$MANIFEST" ]] || { echo "ERROR: missing fixture manifest: $MANIFEST" >&2; exit 1; }
 [[ -f "$TARGETS" ]] || { echo "ERROR: missing target-only transitions: $TARGETS" >&2; exit 1; }
-[[ -f "$BASE_DB" ]] || { echo "ERROR: missing baseline TimSim DB: $BASE_DB" >&2; exit 1; }
 [[ -x "$FIXTURE_VENV/bin/python" ]] || { echo "ERROR: fixture environment not found: $FIXTURE_VENV" >&2; exit 1; }
 
 manifest_value() {
@@ -47,6 +45,15 @@ for key in path:
 print(sys.argv[3] if value is None else value)
 PY
 }
+
+FIXTURE_KIND="$(manifest_value fixture_kind unknown)"
+BLUEPRINT_RUN="$(manifest_value blueprint_run '')"
+if [[ -n "$BLUEPRINT_RUN" ]]; then
+  BASE_DB="$FIXTURE/$BLUEPRINT_RUN/synthetic_data.db"
+else
+  BASE_DB="$FIXTURE/OpenSwathTimSim_01_baseline/synthetic_data.db"
+fi
+[[ -f "$BASE_DB" ]] || { echo "ERROR: missing TimSim blueprint/baseline DB: $BASE_DB" >&2; exit 1; }
 
 COUNT="$(manifest_value entrapment.precursors 0)"
 SEED="$(manifest_value entrapment.seed 20260812)"
@@ -105,7 +112,11 @@ path.write_text(json.dumps(m, indent=2)+'\n')
 print(f'Updated {path}: active entrapment mode={mode}')
 PY
 
-"$ROOT/scripts/check_fixture.sh" "$FIXTURE"
+if [[ "$FIXTURE_KIND" == "openms_timsim_multirun_study_v1" ]]; then
+  "$FIXTURE_VENV/bin/python" "$ROOT/tools/validate_study.py" "$FIXTURE"
+else
+  "$ROOT/scripts/check_fixture.sh" "$FIXTURE"
+fi
 printf '\nActive entrapment mode: %s\n' "$MODE"
 printf 'Library: %s\n' "$FIXTURE/OpenSwathTimSim.transitions.tsv"
 printf 'Truth:   %s\n' "$FIXTURE/OpenSwathTimSim.entrapment_truth.tsv"

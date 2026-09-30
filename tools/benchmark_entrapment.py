@@ -37,7 +37,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-RUN_ROLES = ("baseline", "control_replicate", "treatment")
 DEFAULT_Q_GRID = (0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.10)
 
 
@@ -492,7 +491,8 @@ def _fdr_calibration(
     rows: list[dict[str, Any]] = []
     groups: list[tuple[str, pd.DataFrame]] = [("pooled", frame)]
     if include_run_scopes:
-        groups.extend((role, frame[frame["run_role"] == role]) for role in RUN_ROLES)
+        run_roles = sorted(str(value) for value in frame["run_role"].dropna().unique())
+        groups.extend((role, frame[frame["run_role"] == role]) for role in run_roles)
     for scope, subset in groups:
         for threshold in q_grid:
             row = _confusion_at_q(subset, threshold)
@@ -675,7 +675,8 @@ def _export_context_metrics(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     groups = [("pooled", export)]
-    groups.extend((role, export[export["run_role"] == role]) for role in RUN_ROLES)
+    run_roles = sorted(str(value) for value in export["run_role"].dropna().unique())
+    groups.extend((role, export[export["run_role"] == role]) for role in run_roles)
     for scope, subset in groups:
         all_metrics = _accepted_metrics(subset)
         rows.append({"scope": scope, "selection": "all_exported_rows", **all_metrics})
@@ -757,7 +758,11 @@ def _make_plots(
     plt.plot([0, upper], [0, upper], "--", linewidth=1.1, label="ideal")
     plt.plot(run_pooled["q_threshold"], run_pooled["empirical_fdp"], marker="o", label="run-level pooled")
     plt.plot(global_pooled["q_threshold"], global_pooled["empirical_fdp"], marker="s", label="global peptide")
-    for role in RUN_ROLES:
+    run_roles = sorted(scope for scope in run_fdr["scope"].dropna().astype(str).unique() if scope != "pooled")
+    # Individual-run curves are useful for small fixtures; for large studies only
+    # show them when the legend remains readable. Per-run tables are always written.
+    plot_run_roles = run_roles if len(run_roles) <= 12 else []
+    for role in plot_run_roles:
         group = run_fdr[run_fdr["scope"] == role].sort_values("q_threshold")
         if not group.empty:
             plt.plot(group["q_threshold"], group["empirical_fdp"], marker=".", alpha=0.4, linewidth=0.8, label=f"run: {role.replace('_', ' ')}")
@@ -934,7 +939,8 @@ def main() -> int:
 
     run_pooled_q = _confusion_at_q(run_best, args.q_threshold)
     run_per_run = []
-    for role in RUN_ROLES:
+    run_roles = sorted(str(value) for value in run_best["run_role"].dropna().unique())
+    for role in run_roles:
         subset = run_best[run_best["run_role"] == role]
         metrics = _confusion_at_q(subset, args.q_threshold)
         _, _, curve_metrics = _roc_pr_points(subset)

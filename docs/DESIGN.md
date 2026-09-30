@@ -118,3 +118,18 @@ imspy-simulation==0.4.2
 ```
 
 The pinned upstream simulator is used directly. If reproducibility regresses in a later release, the repository should expose that regression through tests and either retain a known-good version or address the issue upstream.
+
+## Multi-run study design
+
+The multi-run benchmark freezes target identities from a blueprint simulation before
+any condition effect is assigned. Condition runs reuse that molecular blueprint and
+change abundance only. This ensures treatment-induced missingness and fold changes are
+outcomes of the benchmark rather than criteria used to choose targets.
+
+The canonical study is 25 controls plus 25 treatments with 1,000 frozen targets and
+1,000 independent entrapments. Protein treatment effects and replicate variation are
+seeded independently from the synthetic-proteome and TimSim blueprint seeds.
+
+Quantification has separate design, realized-input, and post-simulation realized truth.
+OpenDIA is evaluated against realized finite-cohort abundance; design-vs-realized
+statistics describe biological sampling variation. See `STUDY_BENCHMARK.md`.
