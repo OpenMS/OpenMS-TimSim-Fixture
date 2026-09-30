@@ -89,21 +89,69 @@ The independent external-null construction is therefore behaving close to the no
 1% scale in the 1,000-target/1,000-entrapment validation and remains the canonical FDR
 lane. The paired-hard construction remains an interference stress test only.
 
-## Quantification diagnostic gate — current next step
+## Quantification diagnostic gate — completed
 
-Before generating 25+25 runs, run the cheap diagnostic pass on the existing target-only
-3+3 benchmark outputs. `tools/diagnose_study_quantification.py` reports:
+The 3+3 target-only outputs were diagnosed without rerunning TimSim or OpenDIA.
 
-- per-run log2 TimSim-input vs OpenDIA-intensity correlation and regression slope;
-- realized-vs-observed effect slope/intercept;
-- metrics after excluding the worst 1% effect residuals;
-- p90/p95/p99 residual tails and counts above 0.5/1.0 log2 units;
-- association of large effect residuals with RT error, IM error, and realized signal;
-- protein effect accuracy stratified by one, two, or >=3 selected precursors;
-- ranked peptide/protein quantification outliers.
+Per-run absolute abundance tracking:
 
-`benchmark_study_lanes.sh` runs this diagnostic automatically. The next decision is:
-if per-run abundance tracking and trimmed effect recovery are strong and errors are
-confined to a small heavy tail, proceed to 25+25; if effect slopes are systematically
-biased or errors remain broad after trimming, investigate OpenDIA quantification before
-scaling.
+- mean log2 TimSim-input vs OpenDIA-intensity Pearson r = 0.8921;
+- minimum run Pearson r = 0.8873;
+- mean regression slope = 0.8197, range 0.8086–0.8303.
+
+Effect recovery:
+
+- peptide realized vs OpenDIA: r=0.7957, slope=0.8108, MAE=0.1776, RMSE=0.4658;
+- peptide after excluding the worst 1% residuals: r=0.8903, slope=0.8409, MAE=0.1479;
+- protein realized vs OpenDIA: r=0.7837, slope=0.7788, MAE=0.2096, RMSE=0.4745;
+- protein after excluding the worst 1% residuals: r=0.8567, slope=0.8121, MAE=0.1813.
+
+Residual tails are substantial rather than confined to a single extreme observation:
+
+- peptide median absolute residual 0.0208 log2, p95 0.9399, p99 1.8076;
+- 103/1000 peptides exceed 0.5 log2 residual and 47/1000 exceed 1.0;
+- protein median absolute residual 0.0339 log2, p95 1.0635, p99 1.8520;
+- 76/607 proteins exceed 0.5 log2 residual and 36/607 exceed 1.0.
+
+Large peptide effect residuals are associated with poor localization and lower signal:
+
+- Spearman |effect residual| vs mean absolute RT error = 0.5954;
+- Spearman |effect residual| vs mean absolute IM error = 0.4984;
+- Spearman |effect residual| vs median realized signal = -0.5312.
+
+Protein aggregation is strongly dependent on selected precursor count:
+
+- one selected precursor: n=302, r=0.7001, MAE=0.2942, slope=0.7400;
+- two selected precursors: n=236, r=0.8586, MAE=0.1471, slope=0.7936;
+- three or more selected precursors: n=69, r=0.9899, MAE=0.0528, slope=0.9054.
+
+Interpretation: the multi-run fixture, design truth, realized truth, identification lane,
+and independent-null FDR lane are validated. The remaining issue is quantitative
+measurement fidelity. The nearly identical ~0.82 per-run slopes indicate a systematic
+response compression that additional biological replicates alone will not remove. The
+large residual tail is additionally enriched for low-signal and poorly localized peak
+groups.
+
+## Current next step
+
+Do not generate the full 25+25 production study yet. First establish where the
+quantitative compression enters the pipeline by measuring raw simulated MS2 signal
+directly from the generated TDF/XIPM data at the realized precursor coordinates.
+
+The decisive comparison is:
+
+1. TimSim input abundance vs raw simulated MS2 oracle intensity;
+2. raw simulated MS2 oracle intensity vs OpenDIA reported intensity;
+3. realized condition log2FC vs raw-oracle log2FC vs OpenDIA log2FC.
+
+If TimSim input -> raw signal has slope near 1 while raw signal -> OpenDIA remains
+compressed, investigate OpenDIA peak localization/integration before scaling. If the
+raw simulated signal already has the ~0.82 slope, the study benchmark should use the
+raw realized signal as the primary quantitative measurement truth rather than assuming
+a linear relationship to TimSim input abundance.
+
+For the eventual production protein-effect benchmark, also consider a simulator-only
+selection contract requiring at least three high-quality precursors per benchmark
+protein. The 3+ precursor stratum already shows near-ideal protein effect recovery,
+whereas single-precursor proteins dominate the protein-level heavy tail. This should be
+implemented as a benchmark-design decision, not as an OpenDIA-result-dependent filter.
