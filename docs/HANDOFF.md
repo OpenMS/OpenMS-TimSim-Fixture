@@ -172,62 +172,75 @@ compression relative to simulator input. The remaining scientific question is wh
 the raw attenuation is expected DIA cofragmentation/interference captured by the oracle,
 or a nonlinear/raw-response property of the simulator itself.
 
-## Current next step — interference sensitivity sweep hotfix, rerun pending
+## Interference sensitivity sweep — completed
 
-The raw-oracle sensitivity/interference decomposition is implemented and remains the final
-measurement-model gate before changing the canonical 25+25 target composition. The first
-run against the real transition-library schema exposed a pandas merge-column collision:
-both the transition library and reference-coordinate table contain `PrecursorMz`, causing
-the merged columns to be suffixed and the specificity ranker to fail before raw-data
-scanning. The merge now preserves the library value as `LibraryPrecursorMz` and uses the
-canonical reference value as `PrecursorMz`. No TimSim or OpenDIA rerun is required.
-
-New implementation:
-
-- `tools/sweep_raw_signal_oracle.py`;
-- `scripts/run_raw_signal_oracle_sweep.sh`;
-- simulator-only transition-specificity ranking against the complete TimSim blueprint
-  fragment universe;
-- single-pass accumulation of the complete fixed sweep grid;
-- machine-readable and Markdown summaries comparing broad/all-transition and
-  tight/high-specificity extraction.
-
-Default fixed grid:
+The raw-oracle sensitivity/interference sweep completed successfully on the existing 3+3
+study after the `PrecursorMz` merge hotfix. No TimSim or OpenDIA rerun was required. The
+sweep evaluated 144 fixed diagnostic configurations in a single pass per raw run:
 
 - RT half-windows: 1, 2, 4, and 6 s;
 - IM half-windows: 0.01, 0.02, and 0.03 1/K0;
 - fragment tolerances: 10, 15, and 25 ppm;
-- transition subsets: all 8, top 6, top 4, and top 3 by blueprint collision specificity.
+- transition subsets: all 8, top 6, top 4, and top 3 by simulator-only collision specificity.
 
-This yields 144 diagnostic configurations while reading each generated `.d` run only once.
-Transition ranking uses only simulator/acquisition geometry and predicted fragment intensity;
-OpenDIA scores, coordinates, q-values, intensities, and raw observed intensity are excluded
-from ranking.
+Primary broad-oracle baseline (`±6 s`, `±0.03 1/K0`, `±25 ppm`, all 8 transitions):
 
-Repository validation after the schema-collision hotfix: **26 tests passed**, including a
-regression test where both merge inputs contain `PrecursorMz`; Python compilation passed,
-and all shell scripts passed `bash -n`.
+- event-proxy -> raw Pearson r = 0.8207; slope = 0.6574;
+- realized-condition effect -> raw effect r = 0.7302; slope = 0.5646; MAE = 0.2710;
+- raw -> OpenDIA per-run slope = 1.0376;
+- raw-effect -> OpenDIA effect slope = 0.9700.
 
-Run the sweep on the existing 3+3 study:
+Predeclared tight/high-specificity configuration (`±1 s`, `±0.01 1/K0`, `±10 ppm`, top 4
+transitions):
 
-```bash
-./scripts/run_raw_signal_oracle_sweep.sh \
-  /home/sing/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3 \
-  /home/sing/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3
-```
+- event-proxy -> raw Pearson r = 0.9754; slope = 0.9567;
+- realized-condition effect -> raw effect r = 0.9717; slope = 0.9499; MAE = 0.0388;
+- raw -> OpenDIA per-run slope = 0.8505;
+- raw-effect -> OpenDIA effect slope = 0.8516;
+- raw positive fraction = 1.0000 for all 6,000 target/run observations.
 
-Decision gate:
+The movement toward unit response is systematic across sweep factors:
 
-- if the tight/top-4 configuration moves both event-proxy -> raw and realized-effect -> raw
-  slopes substantially toward one, treat the broad-oracle attenuation as primarily DIA
-  cofragmentation/interference and proceed to finalize the production target-selection
-  contract;
-- if both tight slopes remain <=~0.75, inspect TimSim target-attributable fragment/raw
-  response before producing the 25+25 canonical benchmark;
-- mixed behavior should be resolved from `sweep_factor_summary.tsv` and
-  `transition_specificity.tsv` rather than by tuning against OpenDIA performance.
+- RT tightening from 6 s to 1 s raises mean proxy->raw slope from 0.8336 to 0.9115;
+- IM tightening from 0.03 to 0.01 raises mean proxy->raw slope from 0.8581 to 0.8971;
+- fragment tolerance tightening from 25 to 10 ppm raises mean proxy->raw slope from 0.8351 to 0.9093;
+- reducing from all 8 to top 3 low-collision transitions raises mean proxy->raw slope from 0.8175 to 0.9203.
 
-The production protein-level benchmark should still move toward a simulator-only selection
-contract with multiple high-quality precursors per protein. The current 3+ precursor stratum
-already shows near-ideal protein effect recovery and should guide the final 1,000-precursor
-composition after this sweep result is known.
+The diagnostic gate therefore resolves to **`interference_supported`**. The broad raw-oracle
+attenuation is predominantly explained by DIA cofragmentation/interference captured when
+wide RT/IM/mass windows and all transitions are summed. TimSim target-attributable response
+is near unit-scale under tight, low-collision extraction, and OpenDIA is not the primary source
+of the original ~0.82 input-vs-observed compression.
+
+This sweep remains diagnostic only. Canonical benchmark extraction or OpenDIA parameters must
+not be tuned to maximize agreement with the oracle. The raw oracle continues to serve only as
+a measurement-model diagnostic alongside biological/design truth and OpenDIA output.
+
+## Current next step — production target-selection contract
+
+The measurement-model gate is now closed. The next implementation should finalize the canonical
+1,000-target production composition around **multiple simulator-only selected precursors per
+protein**, rather than the current ~600-protein composition with many singletons. The 3+3
+diagnostic already showed:
+
+- one selected precursor/protein: r=0.7001, MAE=0.2942;
+- two selected precursors/protein: r=0.8586, MAE=0.1471;
+- three or more selected precursors/protein: r=0.9899, MAE=0.0528.
+
+Preferred production objective: approximately **250 proteins × 4 high-quality precursors/protein
+= 1,000 target precursors**, selected entirely from the TimSim blueprint before treatment effects,
+replicate perturbations, raw measurements, or OpenDIA results exist. Selection should retain the
+existing high-signal criteria and incorporate simulator-only fragment-collision specificity so
+protein-level redundancy and assay cleanliness are explicit properties of the frozen benchmark.
+
+Execution plan:
+
+1. implement the multi-precursor-per-protein selector and validation contract;
+2. generate a fresh 3 control + 3 treatment production-design validation using that selector;
+3. require 1,000 targets, the intended per-protein precursor multiplicity, complete structural
+   truth validation, stable external-null calibration, and acceptable ID/quantification behavior;
+4. only after that checkpoint, generate the canonical 25 control + 25 treatment study with
+   1,000 targets and 1,000 independent entrapments.
+
+Repository sweep implementation checkpoint: commit `a4fd392` added the sweep; the subsequent
+`PrecursorMz` merge hotfix completed before the successful run.
