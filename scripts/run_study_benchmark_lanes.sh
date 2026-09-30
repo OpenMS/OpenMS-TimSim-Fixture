@@ -23,22 +23,17 @@ THREADS="$THREADS" "$ROOT/scripts/run_opendia.sh" "$BUILD_DIR" "$TARGET_OUT" "$T
 printf '\n=== OpenDIA independent-entrapment study lane ===\n'
 THREADS="$THREADS" "$ROOT/scripts/run_opendia.sh" "$BUILD_DIR" "$ENTRAPMENT_OUT" "$ENTRAPMENT_LIBRARY"
 
-rm -rf "$RESULTS_OUT"
-mkdir -p "$RESULTS_OUT"
+printf '
+=== Benchmarking completed OpenDIA study lanes ===
+'
+"$ROOT/scripts/benchmark_study_lanes.sh" "$BUILD_DIR" "$BENCH_ROOT"
 
-printf '\n=== Multi-run identification / quantification benchmark ===\n'
-python "$ROOT/tools/benchmark_study.py" \
-  --build-dir "$BUILD_DIR" \
-  --opendia-dir "$TARGET_OUT" \
-  --out-dir "$RESULTS_OUT/study"
-
-printf '\n=== External-null FDR benchmark ===\n'
-python "$ROOT/tools/benchmark_entrapment.py" \
-  --build-dir "$BUILD_DIR" \
-  --opendia-dir "$ENTRAPMENT_OUT" \
-  --out-dir "$RESULTS_OUT/entrapment"
-
-printf '\nTarget-only OpenDIA: %s\n' "$TARGET_OUT"
-printf 'Entrapment OpenDIA:  %s\n' "$ENTRAPMENT_OUT"
-printf 'Study benchmark:     %s\n' "$RESULTS_OUT/study"
-printf 'FDR benchmark:       %s\n' "$RESULTS_OUT/entrapment"
+printf '
+Target-only OpenDIA: %s
+' "$TARGET_OUT"
+printf 'Entrapment OpenDIA:  %s
+' "$ENTRAPMENT_OUT"
+printf 'Study benchmark:     %s
+' "$RESULTS_OUT/study"
+printf 'FDR benchmark:       %s
+' "$RESULTS_OUT/entrapment"

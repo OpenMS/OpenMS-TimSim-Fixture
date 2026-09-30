@@ -4,76 +4,106 @@
 
 Public repository: `OpenMS/OpenMS-TimSim-Fixture`.
 
-The published smoke baseline is tag `v0.1.0-smoke` at commit `a62b878`. It provides a
-noise-free TimSim/OpenDIA fixture with simulator-only target selection, isolated
-OpenDIA target/FDR lanes, independent entrapments for external-null calibration, and a
-paired-hard interference stress mode.
+The published smoke baseline is tag `v0.1.0-smoke` at commit `a62b878`. The current
+development state implements the replicate-aware multi-run study architecture and
+post-processing recovery path.
 
-## Validated smoke result
+## Canonical multi-run design
 
-The 50-target smoke fixture reached 50/50 target identification in every isolated
-OpenDIA target-only run. The independent-entrapment lane had one accepted global
-entrapment among 51 accepted global target-labelled identities at nominal q <= 0.01;
-50 entrapments are therefore adequate for smoke validation but too small for precise
-1% calibration.
+The production design is 25 control + 25 treatment runs, 1,000 frozen true
+precursors, 1,000 independent entrapments, a 10,000-peptide TimSim blueprint sampled
+from a 20,000-peptide synthetic FASTA, and eight transitions per precursor.
 
-The three-run quantitative benchmark exposed that a single treatment replicate is not
-sufficient to distinguish finite-realization variation from measurement behavior. A
-larger replicate-aware design is now implemented.
+Targets are frozen from a blueprint simulation before treatment effects or
+replicate-specific abundance are generated. Treatment design defaults to 15%
+up-regulated proteins, 15% down-regulated proteins, heterogeneous |log2FC| between
+0.5 and 2.0, and independent run-, protein-, and peptide-level abundance variation.
 
-## Multi-run study implementation
+Three quantitative truth layers are explicit:
 
-The current working tree adds a generalized multi-run study path:
-
-- `scripts/generate_study.sh`
-- `scripts/run_study_benchmark_lanes.sh`
-- `configs/study_blueprint.toml.in`
-- `configs/study_from_existing.toml.in`
-- `tools/prepare_study_databases.py`
-- `tools/render_study_configs.py`
-- `tools/select_reference_precursors.py`
-- `tools/build_study_realized_truth.py`
-- `tools/benchmark_study.py`
-- `tools/validate_study.py`
-- `docs/STUDY_BENCHMARK.md`
-
-Canonical defaults are 25 control + 25 treatment runs, 1,000 frozen true precursors,
-1,000 independent entrapments, a 10,000-peptide TimSim blueprint sampled from a
-20,000-peptide synthetic FASTA, and eight transitions per precursor.
-
-Targets are frozen from the blueprint before treatment effects or replicate-specific
-abundance are created. This intentionally allows condition-specific missingness after
-selection instead of selecting it away.
-
-Treatment design defaults to 15% up-regulated proteins, 15% down-regulated proteins,
-and heterogeneous |log2FC| between 0.5 and 2.0. Independent replicate variation is
-modeled with run-, protein-, and peptide-level log2 SDs of 0.05, 0.15, and 0.08.
-
-Three truth layers are explicit:
-
-1. `OpenSwathTimSim.study_design_truth.tsv`: population/design protein effects.
+1. `OpenSwathTimSim.study_design_truth.tsv`: declared population-level protein effects.
 2. `OpenSwathTimSim.study_abundance_truth.tsv`: actual per-run TimSim input abundance.
 3. `OpenSwathTimSim.realized_truth.tsv`: post-simulation target/run precursor truth.
 
-`run_opendia.sh` and `benchmark_entrapment.py` no longer assume exactly three runs.
-The study benchmark performs replicate-aware peptide/protein effect analysis and Welch
-+ Benjamini-Hochberg differential calls while preserving design-vs-realized and
-realized-vs-observed comparisons separately.
+The target-only OpenDIA lane is authoritative for identification and quantification.
+The target+independent-entrapment lane is authoritative for external-null FDR/FDP and
+PEP calibration.
 
-## Validation status
+## 3+3 full-library validation — completed
 
-Repository tests after the multi-run implementation: 15 passed. Python compilation and
-shell syntax validation also pass in the assistant validation environment.
+Generation completed successfully with 3 control + 3 treatment runs, 1,000 targets,
+and 1,000 independent entrapments.
 
-The next runtime validation should be a 3-control + 3-treatment study using the full
-1,000-target/1,000-entrapment library. This validates target availability, TimSim
-multi-run rendering, OpenDIA multi-input behavior, and study statistics before spending
-compute on the full 25+25 study.
+- six TimSim DIA-PASEF runs completed;
+- each run contains 8,363 peptides and 12,614 precursor ions;
+- 1,000 frozen targets and 6,000 target/run realized-truth rows;
+- RT/mz/IM identities are unchanged across all six runs;
+- abundance differs for >8,300 of 8,363 peptides in every non-reference run.
 
-## Next execution
+OpenDIA target-only lane:
 
-Use the existing PXD017703 DIA-PASEF reference used by the smoke benchmark. Generate
-`validation_3x3` with `generate_study.sh --control-runs 3 --treatment-runs 3` while
-keeping 1,000 targets, 1,000 entrapments, 10,000 simulated peptides, and 20,000 FASTA
-peptides. If that passes fixture validation and both OpenDIA lanes, generate the full
-25+25 study with the default run counts.
+- 1,000/1,000 target precursors recovered in every run at q <= 0.01;
+- 6,000/6,000 target/run observations recovered;
+- per-run RT MAE 0.76–0.81 s;
+- per-run IM MAE approximately 0.00185–0.00189;
+- target-only OpenDIA runtime approximately 68 s wall and 1.1 GB peak memory.
+
+Quantitative truth decomposition:
+
+- peptide design vs realized: Pearson r=0.9796, MAE=0.1138;
+- protein design vs realized: Pearson r=0.9807, MAE=0.1116;
+- peptide realized vs OpenDIA: Pearson r=0.7957, MAE=0.1776, RMSE=0.4658;
+- protein realized vs OpenDIA: Pearson r=0.7837, MAE=0.2096, RMSE=0.4745.
+
+The high design-vs-realized correlations validate the study perturbation model. The
+larger realized-vs-OpenDIA RMSE relative to MAE and individual examples with >1 log2
+unit error indicate a heavy-tail quantification component that must be diagnosed
+before the 25+25 production generation.
+
+Differential abundance at 3+3 using BH q <= 0.05 and |log2FC| >= 0.5:
+
+- peptide sensitivity 0.656, precision 0.888, false-positive rate 0.0339;
+- protein sensitivity 0.618, precision 0.840, false-positive rate 0.0458.
+
+This 3+3 differential sensitivity is not the production power target; the main purpose
+of this stage is architecture, truth, measurement, and calibration validation.
+
+## Independent-entrapment calibration — validated
+
+At nominal q <= 0.01:
+
+- run-level: TP=5,949, entrapment FP=48, empirical FDP=0.0080, recall=0.9915;
+- global peptide: TP=995, entrapment FP=12, empirical FDP=0.0119, recall=0.9950;
+- final OpenDIA export: TP=5,953, entrapment FP=8, empirical FDP=0.00134;
+- unique exported precursor identities: 995 true + 2 entrapments, FDP=0.00201.
+
+Discrimination/calibration:
+
+- run-level ROC AUC 0.9982;
+- global-peptide ROC AUC 0.9986;
+- entrapment-vs-generated-decoy KS statistic 0.0667;
+- run-level PEP Brier 0.0076 / ECE 0.0087;
+- global-peptide PEP Brier 0.0099 / ECE 0.0107.
+
+The independent external-null construction is therefore behaving close to the nominal
+1% scale in the 1,000-target/1,000-entrapment validation and remains the canonical FDR
+lane. The paired-hard construction remains an interference stress test only.
+
+## Quantification diagnostic gate — current next step
+
+Before generating 25+25 runs, run the cheap diagnostic pass on the existing target-only
+3+3 benchmark outputs. `tools/diagnose_study_quantification.py` reports:
+
+- per-run log2 TimSim-input vs OpenDIA-intensity correlation and regression slope;
+- realized-vs-observed effect slope/intercept;
+- metrics after excluding the worst 1% effect residuals;
+- p90/p95/p99 residual tails and counts above 0.5/1.0 log2 units;
+- association of large effect residuals with RT error, IM error, and realized signal;
+- protein effect accuracy stratified by one, two, or >=3 selected precursors;
+- ranked peptide/protein quantification outliers.
+
+`benchmark_study_lanes.sh` runs this diagnostic automatically. The next decision is:
+if per-run abundance tracking and trimmed effect recovery are strong and errors are
+confined to a small heavy tail, proceed to 25+25; if effect slopes are systematically
+biased or errors remain broad after trimming, investigate OpenDIA quantification before
+scaling.

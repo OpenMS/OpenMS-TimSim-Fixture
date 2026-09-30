@@ -429,3 +429,83 @@ def test_benchmark_study_separates_design_realized_and_observed_truth(tmp_path: 
     assert "realized vs OpenDIA" in report
     assert "PEPTIDEAK" in effects
     assert "1.0" in effects
+
+
+def test_study_benchmark_runner_uses_project_python_and_supports_postprocess_only() -> None:
+    runner = (ROOT / "scripts" / "run_study_benchmark_lanes.sh").read_text(encoding="utf-8")
+    assert '"$ROOT/scripts/benchmark_study_lanes.sh" "$BUILD_DIR" "$BENCH_ROOT"' in runner
+    assert "\npython " not in runner
+
+    helper = (ROOT / "scripts" / "benchmark_study_lanes.sh").read_text(encoding="utf-8")
+    assert 'PYTHON="$FIXTURE_VENV/bin/python"' in helper
+    assert '"$PYTHON" "$ROOT/tools/benchmark_study.py"' in helper
+    assert '"$PYTHON" "$ROOT/tools/benchmark_entrapment.py"' in helper
+
+
+def test_quantification_diagnostics_reports_heavy_tail_and_run_signal_fidelity(tmp_path: Path) -> None:
+    import pandas as pd
+
+    study = tmp_path / "study"
+    study.mkdir()
+    runs = [
+        ("C01", "control"), ("C02", "control"),
+        ("T01", "treatment"), ("T02", "treatment"),
+    ]
+    peptide_rows = []
+    measurement_rows = []
+    for idx, (sequence, realized_fc, observed_fc, protein) in enumerate([
+        ("PEPAK", 1.0, 1.0, "P1"),
+        ("PEPBK", 0.0, 0.0, "P2"),
+        ("PEPCK", -1.0, 0.5, "P3"),
+    ]):
+        peptide_rows.append({
+            "PeptideSequence": sequence,
+            "PrecursorCharge": 2,
+            "ProteinId": protein,
+            "TreatmentClass": "unchanged" if realized_fc == 0 else ("up" if realized_fc > 0 else "down"),
+            "DesignLog2FC": realized_fc,
+            "RealizedConditionLog2FC": realized_fc,
+            "ObservedLog2FC": observed_fc,
+            "ControlDetected": 2,
+            "TreatmentDetected": 2,
+            "ControlRuns": 2,
+            "TreatmentRuns": 2,
+            "WelchPValue": 0.1,
+            "BH_QValue": 0.2,
+            "CalledDifferential": False,
+            "TruthDifferential": realized_fc != 0,
+        })
+        for run_name, condition in runs:
+            truth = 100.0 * (2.0 ** realized_fc if condition == "treatment" else 1.0)
+            observed = 1000.0 * (2.0 ** observed_fc if condition == "treatment" else 1.0)
+            measurement_rows.append({
+                "run_name": run_name,
+                "condition": condition,
+                "sequence": sequence,
+                "charge": 2,
+                "realized_input_events": truth * (idx + 1),
+                "intensity": observed * (idx + 1),
+                "rt_error_seconds": 0.1 + idx * 0.1,
+                "im_error": 0.001 + idx * 0.001,
+            })
+    pd.DataFrame(peptide_rows).to_csv(study / "peptide_effects.tsv", sep="\t", index=False)
+    pd.DataFrame(measurement_rows).to_csv(study / "precursor_measurements.tsv", sep="\t", index=False)
+    pd.DataFrame([
+        {"ProteinId": "P1", "TreatmentClass": "up", "DesignLog2FC": 1.0, "RealizedConditionLog2FC": 1.0, "ObservedLog2FC": 1.0, "WelchPValue": 0.1, "ControlRuns": 2, "TreatmentRuns": 2, "SelectedPrecursors": 1, "BH_QValue": 0.2, "CalledDifferential": False, "TruthDifferential": True},
+        {"ProteinId": "P2", "TreatmentClass": "unchanged", "DesignLog2FC": 0.0, "RealizedConditionLog2FC": 0.0, "ObservedLog2FC": 0.0, "WelchPValue": 0.1, "ControlRuns": 2, "TreatmentRuns": 2, "SelectedPrecursors": 2, "BH_QValue": 0.2, "CalledDifferential": False, "TruthDifferential": False},
+        {"ProteinId": "P3", "TreatmentClass": "down", "DesignLog2FC": -1.0, "RealizedConditionLog2FC": -1.0, "ObservedLog2FC": 0.5, "WelchPValue": 0.1, "ControlRuns": 2, "TreatmentRuns": 2, "SelectedPrecursors": 3, "BH_QValue": 0.2, "CalledDifferential": False, "TruthDifferential": True},
+    ]).to_csv(study / "protein_effects.tsv", sep="\t", index=False)
+
+    subprocess.run(
+        [sys.executable, str(TOOLS / "diagnose_study_quantification.py"), "--study-results-dir", str(study)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    diagnostic = study / "quantification_diagnostics"
+    assert (diagnostic / "quantification_diagnostics.md").is_file()
+    assert (diagnostic / "run_signal_fidelity.tsv").is_file()
+    outliers = pd.read_csv(diagnostic / "peptide_quant_outliers.tsv", sep="\t")
+    assert outliers.iloc[0]["PeptideSequence"] == "PEPCK"
+    summary = __import__("json").loads((diagnostic / "quantification_diagnostics.json").read_text())
+    assert summary["peptide_residual"]["gt_1_0"] == 1

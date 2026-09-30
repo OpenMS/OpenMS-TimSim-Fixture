@@ -98,3 +98,33 @@ The independent-entrapment lane continues to use `benchmark_entrapment.py`, whic
 reports run-level, global-peptide, and exported-result FDP plus q/PEP calibration.
 For studies with many runs the per-run calibration tables are retained, while plots
 avoid drawing dozens of overlapping individual-run curves.
+
+## Re-benchmark completed OpenDIA lanes
+
+OpenDIA execution and report generation are separate steps. If
+`opendia_target_only/` and `opendia_entrapment/` already completed successfully,
+regenerate only the study/FDR reports with:
+
+```bash
+./scripts/benchmark_study_lanes.sh STUDY_DIR BENCH_DIR
+```
+
+This helper uses the repository interpreter at `.venv/bin/python` explicitly and
+does not depend on a system `python` executable being available on `PATH`.
+
+## Quantification diagnostic gate before scaling
+
+`benchmark_study_lanes.sh` also runs `tools/diagnose_study_quantification.py` on the
+target-only study results. The diagnostic separates per-run abundance tracking from
+condition-effect recovery and reports effect-regression slope, heavy-tail residuals,
+per-run TimSim-input versus OpenDIA-intensity correlations, RT/IM associations, and
+protein performance stratified by the number of selected precursors.
+
+The report is written under:
+
+```text
+results/study/quantification_diagnostics/
+```
+
+Use the 3+3 diagnostic to decide whether errors are primarily finite-replicate/random
+variation or systematic quantification failures before generating the 25+25 study.

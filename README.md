@@ -169,6 +169,7 @@ The runner retains `workflow.oswpq` under `OpenDIA_intermediates/` for run-level
 
 The benchmark reports:
 
+- a quantification diagnostic separating per-run abundance fidelity from heavy-tail condition-effect errors;
 - target recovery and RT/IM localization;
 - control-replicate and treatment quantitative recovery;
 - explicit correctness failures;
@@ -219,6 +220,14 @@ Then benchmark the two isolated OpenDIA lanes:
 ```bash
 export OPENMS_BUILD=/path/to/OpenMS-build
 THREADS=12 ./scripts/run_study_benchmark_lanes.sh \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
+  "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3"
+```
+
+If both OpenDIA lanes already completed, regenerate only the benchmark reports without rerunning OpenDIA:
+
+```bash
+./scripts/benchmark_study_lanes.sh \
   "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/validation_3x3" \
   "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/benchmarks/validation_3x3"
 ```
