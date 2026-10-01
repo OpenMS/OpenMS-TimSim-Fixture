@@ -11,8 +11,9 @@ post-processing recovery path.
 ## Canonical multi-run design
 
 The production design is 25 control + 25 treatment runs, 1,000 frozen true
-precursors, 1,000 independent entrapments, a 10,000-peptide TimSim blueprint sampled
-from a 20,000-peptide synthetic FASTA, and eight transitions per precursor.
+precursors arranged as exactly 250 proteins × 4 precursors/protein, 1,000 independent
+entrapments, a 14,000-peptide TimSim blueprint sampled from a 28,000-peptide synthetic
+FASTA candidate pool, and eight frozen transitions per precursor.
 
 Targets are frozen from a blueprint simulation before treatment effects or
 replicate-specific abundance are generated. Treatment design defaults to 15%
@@ -240,21 +241,6 @@ The implementation includes focused tests for:
 
 The implementation adds four focused production-selector tests. The complete current checkout should report **30 passing tests** after the overlay is applied; local source-overlay validation also includes Python compilation, shell syntax, and whitespace checks.
 
-## Current next step — final 3+3 production-design validation
-
-Generate a **fresh** 3 control + 3 treatment study using the final 250×4 selector. Do not reuse the earlier `validation_3x3` target set because it was frozen under the global precursor selector.
-
-Required first checkpoint is the blueprint selection stage itself:
-
-- exactly 1,000 targets;
-- exactly 250 proteins;
-- exactly 4 precursors/protein;
-- zero singleton/doubleton/tripleton selected proteins;
-- selection remains blueprint-only and OpenDIA-independent.
-
-If fewer than 250 proteins have four eligible precursor groups, increase `--simulated-peptides` and `--fasta-peptides`; do not weaken high-signal thresholds. Once the fresh 3+3 study passes structural validation, run the existing isolated target-only and independent-entrapment OpenDIA lanes and compare identification, FDR, and protein quantitative recovery. If that passes, generate the canonical 25+25 study without further architecture changes.
-
-
 ## Final 3+3 production-design generation — completed
 
 The first production-contract attempt used a 10,000-peptide blueprint / 20,000-peptide FASTA candidate pool. TimSim completed the blueprint successfully, but the selector found only 198 proteins with at least four eligible precursor groups. The production selector therefore failed closed before any biological runs were generated, as intended. No high-signal threshold was relaxed.
@@ -285,23 +271,83 @@ Canonical fresh production-validation paths:
 - study manifest: `OpenSwathTimSim.study_manifest.tsv`;
 - design truth: `OpenSwathTimSim.study_design_truth.tsv`.
 
-The candidate-pool requirement is therefore now empirically established for this seed/configuration: 10k/20k is insufficient (198/250 proteins), while 14k/28k satisfies the fixed 250×4 contract. Do not lower scientific eligibility thresholds to reduce this requirement.
+The candidate-pool requirement is empirically established for this seed/configuration: 10k/20k is insufficient (198/250 proteins), while 14k/28k satisfies the fixed 250×4 contract. Do not lower scientific eligibility thresholds to reduce this requirement.
 
-## Current next step — OpenDIA validation of the final production design
+## Final 3+3 production-design OpenDIA validation — completed
 
-Do not change fixture generation further at this checkpoint. Run the existing isolated OpenDIA lanes on `production_validation_3x3`:
+The fresh protein-balanced production fixture was benchmarked with the isolated target-only and independent-entrapment OpenDIA lanes.
 
-1. target-only lane for identification, localization, quantification, and differential effects;
-2. independent-entrapment lane for external-null FDR/FDP calibration;
-3. study benchmark/post-processing;
-4. quantification diagnostics focused on protein realized-vs-OpenDIA recovery.
+Target-only identification/recovery:
 
-Primary acceptance questions:
+- 1,000/1,000 target peptides at global 1% FDR;
+- 250/250 selected proteins at global 1% FDR;
+- 6,000/6,000 target/run observations exported;
+- 100% target/run recovery in every one of the six runs;
+- per-run RT MAE approximately 0.99–1.13 s;
+- per-run IM MAE approximately 0.00244–0.00256 1/K0.
 
-- target/run recovery remains near 100% at q <= 0.01;
-- independent-entrapment run/global FDP remains close to nominal 1%;
-- design -> realized effects remain near the previous ~0.98 correlation;
-- enforcing four precursor groups per selected protein materially improves protein realized -> OpenDIA effect recovery relative to the prior mixed-multiplicity study (previous r≈0.78 overall; prior 3+ precursor stratum r≈0.99, MAE≈0.053);
-- no systematic RT/IM localization regression appears.
+Production quantitative truth decomposition:
 
-If this final 3+3 production-design validation passes, generate the canonical 25 control + 25 treatment benchmark using the same 14k/28k (or larger, but not smaller) candidate pool and the unchanged 250×4 selection contract. No additional architecture iteration is planned unless the final 3+3 OpenDIA validation exposes a new failure.
+- peptide design vs realized: r=0.9819, MAE=0.1072;
+- protein design vs realized: r=0.9839, MAE=0.1001;
+- peptide realized vs OpenDIA: r=0.7551, MAE=0.2362;
+- protein realized vs OpenDIA: r=0.8638, MAE=0.1854.
+
+Effect-recovery regression:
+
+- peptide slope=0.7616; trimmed worst 1% slope=0.7851;
+- protein slope=0.7390; trimmed worst 1% slope=0.7863;
+- per-run TimSim-input vs OpenDIA mean r=0.8443 and mean slope=0.7557.
+
+The 4-precursor/protein contract therefore improved protein-level correlation relative to the earlier mixed-multiplicity study, but did not remove systematic effect-amplitude attenuation.
+
+Independent-entrapment calibration remains strong and conservative at nominal q<=0.01:
+
+- run-level TP=5,817, entrapment FP=19, empirical FDP=0.00326;
+- global peptide TP=986, entrapment FP=4, empirical FDP=0.00404;
+- final export TP=5,875, entrapment FP=14, empirical FDP=0.00238;
+- run-level ROC AUC=0.9976; global-peptide ROC AUC=0.9991.
+
+This validates the production fixture structurally and as an external-null FDR benchmark.
+
+## Production raw-signal oracle / interference confirmation — completed
+
+The truth-centered raw oracle and the full 144-configuration interference sweep were rerun on the final 14,000-blueprint / 250×4 production target set. All 6,000 target/run observations had positive raw signal and all eight target transitions were observed.
+
+Broad oracle (`±6 s`, `±0.03 1/K0`, `±25 ppm`, all 8 transitions):
+
+- mean event-proxy -> raw slope=0.5682;
+- realized-condition effect -> raw effect r=0.6744, slope=0.5094, MAE=0.3204;
+- raw -> OpenDIA mean per-run slope=1.0735;
+- raw-effect -> OpenDIA effect slope=0.9722.
+
+Predeclared tight/high-specificity oracle (`±1 s`, `±0.01 1/K0`, `±10 ppm`, top 4 simulator-ranked low-collision transitions):
+
+- mean event-proxy -> raw r=0.9730, slope=0.9582;
+- realized-condition effect -> raw effect r=0.9785, slope=0.9558, MAE=0.0387;
+- raw -> OpenDIA mean per-run slope=0.7857;
+- raw-effect -> OpenDIA effect r=0.7777, slope=0.8030, MAE=0.2167;
+- raw positive fraction=1.0000.
+
+The sweep again resolves to **`interference_supported`**. Tightening RT, IM, fragment-mass windows and reducing to low-collision transitions systematically moves TimSim event-proxy/raw and realized-effect/raw response toward unit slope. This closes the concern that the production fixture or TimSim fragment response itself is intrinsically compressing the declared biological effects.
+
+The production result also refines the earlier interpretation: relative to the tight, low-collision observable signal, current OpenDIA quantification retains roughly 20% effect-amplitude attenuation (`raw-effect -> OpenDIA` slope approximately 0.80). The broad-oracle raw->OpenDIA slope near one must therefore not be interpreted as proving unit-response OpenDIA quantification; broad extraction itself contains strong DIA interference.
+
+This remaining attenuation is now a property to be measured by the benchmark rather than a fixture-generation defect. The canonical fixture must not be tuned against OpenDIA or against the diagnostic oracle to remove it.
+
+## Current state / next step
+
+The benchmark architecture is now frozen for production. No further target-selector, high-signal threshold, OpenDIA parameter, or canonical assay-library tuning is required before scaling.
+
+Canonical production design:
+
+- 25 control + 25 treatment runs;
+- 14,000-peptide TimSim blueprint sampled from a 28,000-peptide synthetic FASTA candidate pool;
+- 250 selected proteins × exactly 4 frozen precursors/protein = 1,000 true targets;
+- 1,000 independent entrapments;
+- eight frozen library transitions per precursor;
+- design/realized truth frozen before OpenDIA;
+- independent-entrapment lane retained as the canonical external-null FDR/FDP benchmark;
+- raw oracle and tight/high-specificity sweep retained as diagnostic-only measurement-model layers.
+
+Next action: generate the canonical 25+25 study with the same policy family and unchanged production-selection thresholds, then run the isolated target-only and independent-entrapment OpenDIA lanes. Use the 25+25 cohort to measure differential-abundance power, effect-size dependence, empirical false-positive behavior, replicate-count subsampling, and final quantitative/FDR performance.
