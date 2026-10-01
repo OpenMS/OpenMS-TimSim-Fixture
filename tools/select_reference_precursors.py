@@ -8,6 +8,7 @@ missingness cannot influence which targets enter the benchmark.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sqlite3
@@ -156,6 +157,85 @@ def _annotate_collision_specificity(
         )
 
 
+
+def _scale_variable_select(
+    eligible: list[dict[str, Any]],
+    count: int,
+) -> list[dict[str, Any]]:
+    """Select a deterministic abundance/geometry-stratified scale library.
+
+    This selector is intentionally different from the correctness-tier high-signal
+    selector. Every input row is already structurally valid and present in the
+    blueprint. The realized-abundance marginal is preserved first; RT/mz/IM
+    coverage is then preserved within each abundance quantile. A stable hash is
+    used only to choose among otherwise equivalent candidates.
+    """
+    if count > len(eligible):
+        raise ValueError(f"Cannot select {count} scale precursors from {len(eligible)} candidates")
+
+    def geometry_stratum(row: dict[str, Any]) -> tuple[int, int, int]:
+        return int(row["rt_bin"]), int(row["mz_bin"]), int(row["im_bin"])
+
+    def stable_key(row: dict[str, Any]) -> tuple[int, str]:
+        digest = hashlib.sha256(
+            f"scale_variable_v1\0{row['precursor_key']}".encode("utf-8")
+        ).digest()
+        return int.from_bytes(digest[:8], "big"), str(row["precursor_key"])
+
+    by_abundance: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in eligible:
+        by_abundance[int(row["abundance_bin"])].append(row)
+    abundance_targets = shared.proportional_targets(
+        [int(row["abundance_bin"]) for row in eligible], count
+    )
+
+    selected: list[dict[str, Any]] = []
+    global_remainder: list[dict[str, Any]] = []
+    for abundance_bin in sorted(by_abundance):
+        rows = by_abundance[abundance_bin]
+        wanted = min(int(abundance_targets.get(abundance_bin, 0)), len(rows))
+        by_geometry: dict[tuple[int, int, int], list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            by_geometry[geometry_stratum(row)].append(row)
+        geometry_targets = shared.proportional_targets(
+            [geometry_stratum(row) for row in rows], wanted
+        ) if wanted else {}
+        abundance_selected: list[dict[str, Any]] = []
+        abundance_remainder: list[dict[str, Any]] = []
+        for category in sorted(by_geometry):
+            category_rows = sorted(by_geometry[category], key=stable_key)
+            take = min(int(geometry_targets.get(category, 0)), len(category_rows))
+            abundance_selected.extend(category_rows[:take])
+            abundance_remainder.extend(category_rows[take:])
+        if len(abundance_selected) < wanted:
+            extra = sorted(abundance_remainder, key=stable_key)[: wanted - len(abundance_selected)]
+            abundance_selected.extend(extra)
+            used = {str(row["precursor_key"]) for row in extra}
+            abundance_remainder = [
+                row for row in abundance_remainder if str(row["precursor_key"]) not in used
+            ]
+        selected.extend(abundance_selected[:wanted])
+        global_remainder.extend(abundance_remainder)
+
+    if len(selected) < count:
+        selected.extend(sorted(global_remainder, key=stable_key)[: count - len(selected)])
+    elif len(selected) > count:
+        selected = sorted(
+            selected,
+            key=lambda row: (int(row["abundance_bin"]), geometry_stratum(row), stable_key(row)),
+        )[:count]
+
+    selected = sorted(
+        selected,
+        key=lambda row: (int(row["abundance_bin"]), geometry_stratum(row), stable_key(row)),
+    )
+    result: list[dict[str, Any]] = []
+    for rank, row in enumerate(selected, start=1):
+        chosen = row.copy()
+        chosen["selection_rank"] = rank
+        result.append(chosen)
+    return result
+
 def _protein_precursor_shortlist(
     rows: list[dict[str, Any]],
     precursors_per_protein: int,
@@ -299,7 +379,7 @@ def main() -> int:
     parser.add_argument("--precursors", type=int, default=1000)
     parser.add_argument(
         "--selection-mode",
-        choices=("global_stratified", "protein_balanced"),
+        choices=("global_stratified", "protein_balanced", "scale_variable"),
         default="global_stratified",
     )
     parser.add_argument("--target-proteins", type=int, default=250)
@@ -321,6 +401,7 @@ def main() -> int:
     parser.add_argument("--mz-window-margin", type=float, default=1.0)
     parser.add_argument("--im-window-margin", type=float, default=0.005)
     parser.add_argument("--rt-bins", type=int, default=5)
+    parser.add_argument("--scale-abundance-bins", type=int, default=10)
     parser.add_argument("--mz-bins", type=int, default=5)
     parser.add_argument("--im-bins", type=int, default=5)
     args = parser.parse_args()
@@ -333,6 +414,8 @@ def main() -> int:
         parser.error("--precursors-per-protein must be positive")
     if args.signal_shortlist_multiplier < 1:
         parser.error("--signal-shortlist-multiplier must be positive")
+    if args.scale_abundance_bins < 2:
+        parser.error("--scale-abundance-bins must be >= 2")
     if args.specificity_top_fragments < 1:
         parser.error("--specificity-top-fragments must be positive")
     if any(value <= 0 for value in (args.specificity_max_rt_seconds, args.specificity_max_im, args.specificity_max_fragment_ppm)):
@@ -395,7 +478,27 @@ def main() -> int:
                 and truth.acquisition_rt_start + margin <= truth.realized_rt_apex <= truth.acquisition_rt_end - margin
             )
 
-        eligible = geometry_ok and present and signal_ok and frame_ok and scan_ok and ion_ok and rt_edge_ok
+        strict_high_signal_eligible = (
+            geometry_ok and present and signal_ok and frame_ok and scan_ok and ion_ok and rt_edge_ok
+        )
+        scale_structural_eligible = (
+            geometry_ok
+            and present
+            and math.isfinite(proxy) and proxy > 0
+            and math.isfinite(frame_mass) and frame_mass > 0
+            and math.isfinite(scan_mass) and scan_mass > 0
+            and math.isfinite(ion_fraction) and ion_fraction > 0
+            and rt_edge_ok
+        )
+        eligible = (
+            scale_structural_eligible
+            if args.selection_mode == "scale_variable"
+            else strict_high_signal_eligible
+        )
+        if strict_high_signal_eligible:
+            stages["strict_high_signal_eligible"] += 1
+        if scale_structural_eligible:
+            stages["scale_structural_eligible"] += 1
         if eligible:
             stages["eligible"] += 1
         candidate_rows.append({
@@ -430,10 +533,18 @@ def main() -> int:
             "scan_ok": int(scan_ok),
             "ion_fraction_ok": int(ion_ok),
             "rt_edge_ok": int(rt_edge_ok),
+            "strict_high_signal_eligible": int(strict_high_signal_eligible),
+            "scale_structural_eligible": int(scale_structural_eligible),
             "eligible": int(eligible),
         })
 
     shared.write_tsv(args.candidate_qc_out, candidate_rows)
+    strict_high_signal_unique = {
+        str(row["sequence"]) for row in candidate_rows if row["strict_high_signal_eligible"]
+    }
+    scale_structural_unique = {
+        str(row["sequence"]) for row in candidate_rows if row["scale_structural_eligible"]
+    }
     eligible_ions = [row for row in candidate_rows if row["eligible"]]
     best_by_sequence: dict[str, dict[str, Any]] = {}
     for row in eligible_ions:
@@ -461,6 +572,17 @@ def main() -> int:
         shared.assign_rank_bins(eligible, "assay_rt", "rt_bin", args.rt_bins)
         shared.assign_rank_bins(eligible, "precursor_mz", "mz_bin", args.mz_bins)
         shared.assign_rank_bins(eligible, "assay_im", "im_bin", args.im_bins)
+        for row in eligible:
+            row["log10_realized_event_proxy"] = math.log10(
+                max(float(row["min_realized_event_proxy"]), 1e-300)
+            )
+        if args.selection_mode == "scale_variable":
+            shared.assign_rank_bins(
+                eligible,
+                "log10_realized_event_proxy",
+                "abundance_bin",
+                args.scale_abundance_bins,
+            )
 
     summary = {
         "selection_is_opendia_independent": True,
@@ -473,6 +595,8 @@ def main() -> int:
         "fragment_eligible_ions": len(fragment_candidates),
         "eligible_ions_after_all_filters": len(eligible_ions),
         "eligible_unique_peptides_after_best_charge": len(eligible),
+        "strict_high_signal_unique_peptides": len(strict_high_signal_unique),
+        "scale_structural_unique_peptides": len(scale_structural_unique),
         "criteria": {
             "min_realized_event_proxy_blueprint": args.min_realized_event_proxy,
             "min_frame_abundance_sum_blueprint": args.min_frame_abundance_sum,
@@ -492,10 +616,16 @@ def main() -> int:
     failure_message: str | None = None
     if len(eligible) < args.precursors:
         summary["status"] = "insufficient_candidates"
-        failure_message = (
-            f"Only {len(eligible)} unique high-signal precursor groups satisfy blueprint criteria; "
-            f"{args.precursors} are required. Increase candidate population; do not relax thresholds merely to reach the target count."
-        )
+        if args.selection_mode == "scale_variable":
+            failure_message = (
+                f"Only {len(eligible)} unique structurally valid precursor groups satisfy the scale blueprint contract; "
+                f"{args.precursors} are required. Increase the candidate population; do not relax fragment/geometry safety criteria merely to reach the target count."
+            )
+        else:
+            failure_message = (
+                f"Only {len(eligible)} unique high-signal precursor groups satisfy blueprint criteria; "
+                f"{args.precursors} are required. Increase candidate population; do not relax thresholds merely to reach the target count."
+            )
 
     selected: list[dict[str, Any]]
     if failure_message is None and args.selection_mode == "protein_balanced":
@@ -539,6 +669,8 @@ def main() -> int:
                 shortlist_multiplier=args.signal_shortlist_multiplier,
             )
             summary.update(protein_metadata)
+    elif failure_message is None and args.selection_mode == "scale_variable":
+        selected = _scale_variable_select(eligible, args.precursors)
     elif failure_message is None:
         selected = shared.stratified_select(eligible, args.precursors)
     else:
@@ -565,7 +697,7 @@ def main() -> int:
         "realized_im_apex_baseline", "rt_edge_margin_seconds",
         "swath_window_index", "swath_window_group", "swath_window_label",
         "swath_mz_lower", "swath_mz_upper", "swath_im_lower", "swath_im_upper",
-        "rt_bin", "mz_bin", "im_bin",
+        "rt_bin", "mz_bin", "im_bin", "abundance_bin", "log10_realized_event_proxy",
         "protein_selection_rank", "protein_precursor_rank",
         "specificity_collision_free_fragments",
         "specificity_all_competitor_precursors_sum",
@@ -648,14 +780,25 @@ def main() -> int:
             if args.selection_mode == "protein_balanced"
             else []
         ),
-        f"- Minimum blueprint realized event proxy: **{args.min_realized_event_proxy:g}**",
+        *(
+            [
+                "- Scale contract: **structurally valid, blueprint-present precursors sampled across realized abundance**",
+                f"- Abundance quantile bins: **{args.scale_abundance_bins}**",
+                f"- Strict correctness-tier high-signal candidates in the same blueprint: **{len(strict_high_signal_unique)}**",
+            ]
+            if args.selection_mode == "scale_variable"
+            else [f"- Minimum blueprint realized event proxy: **{args.min_realized_event_proxy:g}**"]
+        ),
         "",
         "Condition-specific missingness is intentionally allowed after selection and is part of the benchmark.",
         "",
     ]
     args.qc_report.parent.mkdir(parents=True, exist_ok=True)
     args.qc_report.write_text("\n".join(lines), encoding="utf-8")
-    print(f"Selected exactly {len(selected)} blueprint high-signal precursor groups")
+    if args.selection_mode == "scale_variable":
+        print(f"Selected exactly {len(selected)} blueprint scale-variable precursor groups")
+    else:
+        print(f"Selected exactly {len(selected)} blueprint high-signal precursor groups")
     if args.selection_mode == "protein_balanced":
         print(
             f"Production composition: {args.target_proteins} proteins x "

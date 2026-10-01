@@ -262,7 +262,9 @@ def test_scale_presets_keep_reference_and_run_materialization_separate() -> None
     reference = (SCRIPTS / "scale" / "prepare_scale_reference.sh").read_text(encoding="utf-8")
     assert "PRECURSORS:-150000" in reference
     assert "SIMULATED_PEPTIDES:-300000" in reference
-    assert "--selection-mode global_stratified" in reference
+    assert "SELECTION_MODE:-scale_variable" in reference
+    assert '--selection-mode "$SELECTION_MODE"' in reference
+    assert "REUSE_BLUEPRINT" in reference
     bulk = (SCRIPTS / "scale" / "plan_large_bulk_study.sh").read_text(encoding="utf-8")
     sc = (SCRIPTS / "scale" / "plan_single_cell_calibration.sh").read_text(encoding="utf-8")
     runner = (SCRIPTS / "run_materialized_study_task.sh").read_text(encoding="utf-8")
@@ -339,3 +341,13 @@ def test_materialized_finalizer_keeps_partitioned_gzip_truth(tmp_path: Path) -> 
     assert summary["truth_layout"] == "gzip_partition_per_run"
     assert summary["partitioned_truth_rows"] == 4
     assert summary["level_summary"][0]["median_selected_targets_observable"] == 1
+
+
+def test_scale_variable_selector_is_distinct_from_correctness_contract() -> None:
+    selector = (TOOLS / "select_reference_precursors.py").read_text(encoding="utf-8")
+    assert '"scale_variable"' in selector
+    assert "scale_structural_eligible" in selector
+    assert "strict_high_signal_eligible" in selector
+    assert "abundance_bin" in selector
+    assert "scale_variable_v1" in selector
+    assert "do not relax fragment/geometry safety criteria" in selector

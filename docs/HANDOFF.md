@@ -480,3 +480,24 @@ The scale implementation is additive: it does not modify `generate_study.sh`, th
 4. If the 150k target contract succeeds, run one materialized bulk task and one task at each single-cell calibration input level as smoke checks.
 5. Then launch the 50+50 bulk array and 48-cell calibration array.
 6. Select one single-cell production input level from the calibration results, freeze it, and only then launch 100+100 cells.
+
+
+## 2026-10-01: 300k scale blueprint completed; strict-selector failure reclassified
+
+The first 300k-peptide scale-reference attempt was killed during TimSim frame assembly at approximately 192 GiB RSS under a 192 GB allocation. A retry with 320 GB host memory and 8 CPUs completed the expensive TimSim blueprint and reached target selection. Peak RSS on the retry was approximately 306.45 GB and wall time was approximately 59m47s.
+
+The retry then failed **at selection, not simulation**. Blueprint census:
+
+- requested simulated peptides: 300,000; synthetic FASTA candidates: 600,000;
+- total precursor ions in blueprint DB: 381,048;
+- ions with >=8 usable fragments: 309,808;
+- ions with safe DIA geometry: 235,392;
+- ions passing the frozen correctness-tier high-signal filters: 74,074;
+- unique peptide precursors after best-charge reduction under those strict filters: 56,574;
+- requested scale targets: 150,000.
+
+This establishes that the original scale-reference preset was incorrectly reusing the correctness-tier high-signal selection contract. Increasing the candidate universe merely to obtain 150k *easy* targets would both require substantially more host memory and produce an unrealistically prefiltered scale benchmark.
+
+The scale tier now has an explicit `scale_variable` selection contract. It preserves >=8 usable fragments, blueprint presence, safe DIA geometry, positive simulator-realized signal, and RT-edge safety; chooses one charge state per peptide; and deterministically preserves the joint RT/mz/IM/realized-abundance distribution. The established `global_stratified` and `protein_balanced` correctness modes remain unchanged.
+
+The completed 300k blueprint is reusable: `REUSE_BLUEPRINT=1` skips TimSim and reruns only scale selection/library/QC generation. The immediate next gate is to reselect the existing blueprint for 150,000 `scale_variable` targets. If fewer than 150,000 structurally valid unique peptide precursors remain, only then reconsider candidate-universe size or the scale-tier fragment-count contract; do not rerun the 300k TimSim blueprint preemptively.

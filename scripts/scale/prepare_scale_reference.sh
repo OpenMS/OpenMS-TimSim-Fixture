@@ -19,6 +19,8 @@ BLUEPRINT_SEED="${BLUEPRINT_SEED:-2026100201}"
 FASTA_SEED="${FASTA_SEED:-1731}"
 ENTRAPMENT_SEED="${ENTRAPMENT_SEED:-2026100202}"
 COMPACT_REFERENCE="${COMPACT_REFERENCE:-1}"
+REUSE_BLUEPRINT="${REUSE_BLUEPRINT:-0}"
+SELECTION_MODE="${SELECTION_MODE:-scale_variable}"
 
 REFERENCE_D="$(realpath "$REFERENCE_D")"
 OUTPUT_ROOT="$(realpath -m "$OUTPUT_ROOT")"
@@ -38,14 +40,17 @@ VENV="$FIXTURE_VENV"
 PYTHON="$VENV/bin/python"
 TIMSIM="$VENV/bin/timsim"
 
-"$PYTHON" - <<'PY'
+if [[ "$REUSE_BLUEPRINT" != "1" && "$REUSE_BLUEPRINT" != "true" ]]; then
+  "$PYTHON" - <<'PY'
 import torch
 if not torch.cuda.is_available():
     raise SystemExit("ERROR: scale reference requires GPU but torch.cuda.is_available() is false")
 print(f"Scale-reference GPU: {torch.cuda.get_device_name(0)}; torch={torch.__version__}; CUDA={torch.version.cuda}")
 PY
-
-rm -rf "$OUTPUT_ROOT"
+  rm -rf "$OUTPUT_ROOT"
+else
+  echo "Reusing completed scale-reference blueprint; TimSim generation will be skipped."
+fi
 mkdir -p "$OUTPUT_ROOT"/{generated_inputs,rendered_configs,selection_qc}
 FASTA="$OUTPUT_ROOT/generated_inputs/synthetic_proteome.fasta"
 BLUEPRINT_NAME=OpenSwathTimSim_blueprint
@@ -53,26 +58,30 @@ BLUEPRINT_DB="$OUTPUT_ROOT/$BLUEPRINT_NAME/synthetic_data.db"
 SELECTED="$OUTPUT_ROOT/OpenSwathTimSim.high_signal_selection.tsv"
 N_PROTEINS=$(( (FASTA_PEPTIDES + PEPTIDES_PER_PROTEIN - 1) / PEPTIDES_PER_PROTEIN ))
 
-"$PYTHON" "$ROOT/tools/generate_synthetic_fasta.py" \
-  --out "$FASTA" --peptides "$FASTA_PEPTIDES" --seed "$FASTA_SEED" --peptides-per-protein "$PEPTIDES_PER_PROTEIN"
+if [[ "$REUSE_BLUEPRINT" != "1" && "$REUSE_BLUEPRINT" != "true" ]]; then
+  "$PYTHON" "$ROOT/tools/generate_synthetic_fasta.py" \
+    --out "$FASTA" --peptides "$FASTA_PEPTIDES" --seed "$FASTA_SEED" --peptides-per-protein "$PEPTIDES_PER_PROTEIN"
 
-"$PYTHON" "$ROOT/tools/render_study_configs.py" \
-  --repo-root "$ROOT" \
-  --output-root "$OUTPUT_ROOT" \
-  --rendered-dir "$OUTPUT_ROOT/rendered_configs" \
-  --reference "$REFERENCE_D" \
-  --fasta "$FASTA" \
-  --blueprint-name "$BLUEPRINT_NAME" \
-  --blueprint-sample-seed "$BLUEPRINT_SEED" \
-  --n-proteins "$N_PROTEINS" \
-  --num-peptides-total "$FASTA_PEPTIDES" \
-  --num-sample-peptides "$SIMULATED_PEPTIDES" \
-  --gradient-length "$GRADIENT_LENGTH" \
-  --timsim-threads "$TIMSIM_THREADS" \
-  --batch-size 128 --frame-batch-size 100 --use-gpu --blueprint-only
+  "$PYTHON" "$ROOT/tools/render_study_configs.py" \
+    --repo-root "$ROOT" \
+    --output-root "$OUTPUT_ROOT" \
+    --rendered-dir "$OUTPUT_ROOT/rendered_configs" \
+    --reference "$REFERENCE_D" \
+    --fasta "$FASTA" \
+    --blueprint-name "$BLUEPRINT_NAME" \
+    --blueprint-sample-seed "$BLUEPRINT_SEED" \
+    --n-proteins "$N_PROTEINS" \
+    --num-peptides-total "$FASTA_PEPTIDES" \
+    --num-sample-peptides "$SIMULATED_PEPTIDES" \
+    --gradient-length "$GRADIENT_LENGTH" \
+    --timsim-threads "$TIMSIM_THREADS" \
+    --batch-size 128 --frame-batch-size 100 --use-gpu --blueprint-only
 
-CONFIG="$OUTPUT_ROOT/rendered_configs/000_blueprint.toml"
-if "$TIMSIM" --help 2>&1 | grep -q -- '--config'; then "$TIMSIM" --config "$CONFIG"; else "$TIMSIM" "$CONFIG"; fi
+  CONFIG="$OUTPUT_ROOT/rendered_configs/000_blueprint.toml"
+  if "$TIMSIM" --help 2>&1 | grep -q -- '--config'; then "$TIMSIM" --config "$CONFIG"; else "$TIMSIM" "$CONFIG"; fi
+else
+  [[ -s "$FASTA" ]] || { echo "ERROR: reuse requested but FASTA missing: $FASTA" >&2; exit 1; }
+fi
 [[ -s "$BLUEPRINT_DB" ]] || { echo "ERROR: blueprint DB missing: $BLUEPRINT_DB" >&2; exit 1; }
 
 "$PYTHON" "$ROOT/tools/select_reference_precursors.py" \
@@ -83,7 +92,7 @@ if "$TIMSIM" --help 2>&1 | grep -q -- '--config'; then "$TIMSIM" --config "$CONF
   --qc-json "$OUTPUT_ROOT/selection_qc/selection_summary.json" \
   --qc-report "$OUTPUT_ROOT/selection_qc/selection_report.md" \
   --precursors "$PRECURSORS" \
-  --selection-mode global_stratified \
+  --selection-mode "$SELECTION_MODE" \
   --min-realized-event-proxy 50000 \
   --min-frame-abundance-sum 0.90 \
   --min-scan-abundance-sum 0.95 \
@@ -143,7 +152,7 @@ payload={
   'simulated_peptides_requested':int(sys.argv[3]),
   'fasta_peptides':int(sys.argv[4]),
   'independent_entrapments':int(sys.argv[5]),
-  'selection_mode':'global_stratified_variable_proteome_contract',
+  'selection_mode':'scale_variable_abundance_stratified_v1',
   'selected_proteins':len(counts),
   'precursors_per_protein':{'min':min(values), 'median':pct(0.5), 'p90':pct(0.9), 'p95':pct(0.95), 'max':max(values)},
 }
@@ -156,4 +165,5 @@ if [[ "$COMPACT_REFERENCE" == "1" || "$COMPACT_REFERENCE" == "true" ]]; then
   find "$BLUEPRINT_DIR" -mindepth 1 -maxdepth 1 ! -name synthetic_data.db -exec rm -rf {} +
 fi
 printf '\nScale reference ready: %s\n' "$OUTPUT_ROOT"
+printf 'Selection mode: %s; reused blueprint: %s\n' "$SELECTION_MODE" "$REUSE_BLUEPRINT"
 printf 'Inspect %s/selection_qc/selection_summary.json and scale_reference_manifest.json before planning biological runs.\n' "$OUTPUT_ROOT"

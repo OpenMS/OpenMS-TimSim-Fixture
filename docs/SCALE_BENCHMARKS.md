@@ -125,3 +125,14 @@ The production tier should preserve the selected input level and all other abund
 Target selection remains frozen from the high-input blueprint before condition effects and before OpenDIA. Neither raw-oracle measurements nor OpenDIA outputs influence the 150k target set.
 
 Single-cell run-specific zeros are part of biological truth, not entrapments. Independent entrapments remain globally absent target-labelled external negatives and serve a different FDR-calibration role.
+
+
+## Scale-reference selection contract
+
+The scale/realism tier deliberately uses a different target-selection contract from the frozen correctness tier.
+
+`protein_balanced` and `global_stratified` retain the established high-signal thresholds used for correctness/calibration fixtures. `scale_variable` is intended for dense realistic assay libraries: it requires blueprint presence, safe DIA geometry, the configured minimum usable fragment count, positive realized simulator signal, and RT-edge safety, then freezes one charge state per peptide while preserving the joint RT/mz/IM/realized-abundance distribution. It does **not** require every library precursor to exceed the correctness-tier minimum event proxy or high ion-fraction thresholds. This is intentional: a 150k realism library must contain difficult and lower-abundance assays rather than 150k preselected easy identifications.
+
+The selector remains simulator-only and runs before any biological condition effects, raw-oracle inspection, or OpenDIA analysis. Selection is deterministic within joint RT/mz/IM/abundance strata.
+
+A completed large blueprint may be reselected without rerunning TimSim by setting `REUSE_BLUEPRINT=1` when invoking `scripts/scale/prepare_scale_reference.sh`. The reuse path requires the existing blueprint SQLite DB and synthetic FASTA and changes only target/library/QC products.
