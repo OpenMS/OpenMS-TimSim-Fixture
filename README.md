@@ -220,8 +220,8 @@ Validate the final production composition first with 3+3 runs at the full librar
   --precursors-per-protein 4 \
   --selection-mode protein_balanced \
   --entrapments 1000 \
-  --simulated-peptides 10000 \
-  --fasta-peptides 20000
+  --simulated-peptides 14000 \
+  --fasta-peptides 28000
 ```
 
 Then benchmark the two isolated OpenDIA lanes:
@@ -274,6 +274,22 @@ For the production 25+25 study, omit the run-count overrides only after the stud
   --reference /absolute/path/to/reference.d \
   --output "$HOME/Documents/datasets/OpenMS-TimSim-Fixture/studies/control25_treatment25_targets1000"
 ```
+
+## Container images and GPU generation
+
+A CUDA-runtime-only Docker image is provided for TimSim generation. The image pins the project to `imspy-simulation==0.4.2`, records source/dependency provenance, and verifies at build time that the installed PyTorch build is CUDA-enabled.
+
+The repository also contains a generic Docker-to-SIF conversion helper. GitHub Actions builds the Docker image, publishes it to GitHub Container Registry, converts the exact built Docker image to a SIF, verifies the SIF payload, and uploads the SIF plus SHA-256/provenance as a workflow artifact.
+
+```bash
+./scripts/container/build_docker.sh
+./scripts/container/export_docker_archive.sh
+./scripts/container/build_sif_from_docker_archive.sh \
+  openms-timsim-fixture_sha-<sha>.docker.tar \
+  openms-timsim-fixture_sha-<sha>.sif
+```
+
+GPU-enabled study generation uses the same `generate_study.sh --use-gpu` path regardless of the execution site. Cluster-specific schedulers, filesystem paths, aliases, and deployment wrappers are intentionally kept outside this public repository. See [`docs/CONTAINERS.md`](docs/CONTAINERS.md) for the portable build and distribution contract.
 
 ## Reproducibility policy
 

@@ -1,0 +1,187 @@
+name: Build container images
+
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: container-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Docker + SIF
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Resolve image metadata
+        id: meta
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          short_sha="${GITHUB_SHA:0:12}"
+          sha_tag="sha-${short_sha}"
+          build_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
+          echo "build_utc=$build_utc" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+          BUILD_UTC: ${{ steps.meta.outputs.build_utc }}
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --load \
+            --platform linux/amd64 \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --file docker/Dockerfile \
+            --build-arg "GIT_SHA=$GITHUB_SHA" \
+            --build-arg "BUILD_UTC=$BUILD_UTC" \
+            --tag "$IMAGE:$SHA_TAG" \
+            .
+
+          docker run --rm "$IMAGE:$SHA_TAG" \
+            python -c 'import importlib.metadata, torch; print("imspy-simulation", importlib.metadata.version("imspy-simulation")); print("torch", torch.__version__, "CUDA build", torch.version.cuda)'
+
+      - name: Push Docker image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+        run: |
+          set -Eeuo pipefail
+          docker push "$IMAGE:$SHA_TAG"
+
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            docker tag "$IMAGE:$SHA_TAG" "$IMAGE:main"
+            docker push "$IMAGE:main"
+          fi
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            docker tag "$IMAGE:$SHA_TAG" "$IMAGE:$tag"
+            docker tag "$IMAGE:$SHA_TAG" "$IMAGE:latest"
+            docker push "$IMAGE:$tag"
+            docker push "$IMAGE:latest"
+          fi
+
+      - name: Export exact Docker image
+        id: archive
+        shell: bash
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+        run: |
+          set -Eeuo pipefail
+          archive="$RUNNER_TEMP/openms-timsim-fixture_sha-${SHORT_SHA}.docker.tar"
+          docker save --output "$archive" "$IMAGE:$SHA_TAG"
+          sha256sum "$archive" > "${archive}.sha256"
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Install Apptainer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends software-properties-common
+          sudo add-apt-repository -y ppa:apptainer/ppa
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends apptainer
+          apptainer --version
+
+      - name: Build SIF from Docker archive
+        id: sif
+        shell: bash
+        env:
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          DOCKER_ARCHIVE: ${{ steps.archive.outputs.path }}
+        run: |
+          set -Eeuo pipefail
+          sif="$RUNNER_TEMP/openms-timsim-fixture_sha-${SHORT_SHA}.sif"
+          ./scripts/container/build_sif_from_docker_archive.sh \
+            "$DOCKER_ARCHIVE" \
+            "$sif"
+          echo "path=$sif" >> "$GITHUB_OUTPUT"
+
+      - name: Verify SIF payload
+        shell: bash
+        env:
+          SIF: ${{ steps.sif.outputs.path }}
+        run: |
+          set -Eeuo pipefail
+          apptainer exec "$SIF" \
+            python -c 'import importlib.metadata, torch; assert torch.version.cuda is not None; print("imspy-simulation", importlib.metadata.version("imspy-simulation")); print("torch", torch.__version__, "CUDA build", torch.version.cuda)'
+          apptainer exec "$SIF" \
+            cat /opt/openms-timsim-fixture/container-build-info.txt
+
+      - name: Write CI provenance
+        shell: bash
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+          BUILD_UTC: ${{ steps.meta.outputs.build_utc }}
+          DOCKER_ARCHIVE: ${{ steps.archive.outputs.path }}
+          SIF: ${{ steps.sif.outputs.path }}
+        run: |
+          set -Eeuo pipefail
+          provenance="$RUNNER_TEMP/container-ci-provenance.txt"
+          {
+            echo "git_sha=$GITHUB_SHA"
+            echo "git_ref=$GITHUB_REF"
+            echo "docker_image=$IMAGE:$SHA_TAG"
+            echo "docker_image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE:$SHA_TAG")"
+            echo "docker_archive_sha256=$(sha256sum "$DOCKER_ARCHIVE" | awk '{print $1}')"
+            echo "sif_sha256=$(sha256sum "$SIF" | awk '{print $1}')"
+            echo "build_utc=$BUILD_UTC"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "apptainer=$(apptainer --version)"
+          } > "$provenance"
+          cat "$provenance"
+
+      - name: Stage SIF artifact
+        shell: bash
+        env:
+          SIF: ${{ steps.sif.outputs.path }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/container-artifact"
+          cp "$SIF" "${SIF}.sha256" "$RUNNER_TEMP/container-artifact/"
+          cp "$RUNNER_TEMP/container-ci-provenance.txt" "$RUNNER_TEMP/container-artifact/"
+
+      - name: Upload SIF artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openms-timsim-fixture-sif-${{ steps.meta.outputs.sha_tag }}
+          path: ${{ runner.temp }}/container-artifact/
+          if-no-files-found: error
+          retention-days: 30

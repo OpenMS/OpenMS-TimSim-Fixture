@@ -15,8 +15,8 @@ TARGET_PROTEINS=250
 PRECURSORS_PER_PROTEIN=4
 SELECTION_MODE=protein_balanced
 ENTRAPMENTS=1000
-SIMULATED_PEPTIDES=10000
-FASTA_PEPTIDES=20000
+SIMULATED_PEPTIDES=14000
+FASTA_PEPTIDES=28000
 PEPTIDES_PER_PROTEIN=20
 GRADIENT_LENGTH=30
 TRANSITIONS_PER_PRECURSOR=8
@@ -29,6 +29,8 @@ ENTRAPMENT_SEED=2026093201
 TIMSIM_THREADS=1
 BATCH_SIZE=128
 FRAME_BATCH_SIZE=100
+USE_GPU=false
+EXECUTION_STAGE=full
 RUN_LOG2_SD=0.05
 PROTEIN_LOG2_SD=0.15
 PEPTIDE_LOG2_SD=0.08
@@ -65,13 +67,16 @@ Study options:
   --precursors-per-protein N          Frozen precursors per selected protein (default: 4)
   --selection-mode MODE               protein_balanced (default) or global_stratified
   --entrapments N                     Independent external-null precursors (default: 1000)
-  --simulated-peptides N              Blueprint TimSim peptide population (default: 10000)
-  --fasta-peptides N                  Synthetic FASTA peptide pool (default: 20000)
+  --simulated-peptides N              Blueprint TimSim peptide population (default: 14000)
+  --fasta-peptides N                  Synthetic FASTA peptide pool (default: 28000)
   --blueprint-seed N                  Blueprint TimSim sample seed
   --fasta-seed N                      Synthetic proteome seed
   --study-seed N                      Protein effects / replicate abundance seed
   --sample-seed-base N                First child TimSim seed base
   --timsim-threads N                  TimSim threads per run (default: 1)
+  --use-gpu                           Render TimSim configs with performance.use_gpu=true
+  --prepare-only                      Prepare blueprint/truth/configs, but do not generate biological runs
+  --finalize-only                     Finalize/validate an already generated parallel study
 
 Biological variation:
   --run-log2-sd X                     Run-global abundance SD (default: 0.05)
@@ -106,6 +111,9 @@ while [[ $# -gt 0 ]]; do
     --study-seed) STUDY_SEED="${2:?missing value}"; shift 2 ;;
     --sample-seed-base) SAMPLE_SEED_BASE="${2:?missing value}"; shift 2 ;;
     --timsim-threads) TIMSIM_THREADS="${2:?missing value}"; shift 2 ;;
+    --use-gpu) USE_GPU=true; shift ;;
+    --prepare-only) EXECUTION_STAGE=prepare; shift ;;
+    --finalize-only) EXECUTION_STAGE=finalize; shift ;;
     --run-log2-sd) RUN_LOG2_SD="${2:?missing value}"; shift 2 ;;
     --protein-log2-sd) PROTEIN_LOG2_SD="${2:?missing value}"; shift 2 ;;
     --peptide-log2-sd) PEPTIDE_LOG2_SD="${2:?missing value}"; shift 2 ;;
@@ -130,6 +138,11 @@ done
   echo "ERROR: --selection-mode must be protein_balanced or global_stratified" >&2
   exit 2
 }
+[[ "$EXECUTION_STAGE" == "full" || "$EXECUTION_STAGE" == "prepare" || "$EXECUTION_STAGE" == "finalize" ]] || {
+  echo "ERROR: invalid execution stage: $EXECUTION_STAGE" >&2
+  exit 2
+}
+
 if [[ "$SELECTION_MODE" == "protein_balanced" ]]; then
   EXPECTED_BALANCED_PRECURSORS=$(( TARGET_PROTEINS * PRECURSORS_PER_PROTEIN ))
   (( PRECURSORS == EXPECTED_BALANCED_PRECURSORS )) || {
@@ -150,6 +163,14 @@ require_external_output_path "$OUTPUT_ROOT" "study output directory"
 
 run_timsim() {
   local config="$1"
+  if [[ "$USE_GPU" == "true" ]]; then
+    "$VENV/bin/python" - <<'PYGPU'
+import torch
+if not torch.cuda.is_available():
+    raise SystemExit("ERROR: --use-gpu requested but torch.cuda.is_available() is false")
+print(f"TimSim GPU: {torch.cuda.get_device_name(0)}; torch CUDA={torch.version.cuda}")
+PYGPU
+  fi
   if "$VENV/bin/timsim" --help 2>&1 | grep -q -- '--config'; then
     "$VENV/bin/timsim" --config "$config"
   else
@@ -157,8 +178,11 @@ run_timsim() {
   fi
 }
 
-rm -rf "$OUTPUT_ROOT"
-mkdir -p "$OUTPUT_ROOT"/{generated_inputs,rendered_configs,selection_qc,condition_inputs,tdfs}
+GPU_RENDER_ARGS=()
+if [[ "$USE_GPU" == "true" ]]; then
+  GPU_RENDER_ARGS+=(--use-gpu)
+fi
+
 FASTA="$OUTPUT_ROOT/generated_inputs/synthetic_proteome.fasta"
 STUDY_MANIFEST="$OUTPUT_ROOT/OpenSwathTimSim.study_manifest.tsv"
 DESIGN_TRUTH="$OUTPUT_ROOT/OpenSwathTimSim.study_design_truth.tsv"
@@ -172,6 +196,10 @@ QC_REPORT="$OUTPUT_ROOT/selection_qc/selection_report.md"
 BLUEPRINT_NAME="OpenSwathTimSim_blueprint"
 BLUEPRINT_DB="$OUTPUT_ROOT/$BLUEPRINT_NAME/synthetic_data.db"
 N_PROTEINS=$(( (FASTA_PEPTIDES + PEPTIDES_PER_PROTEIN - 1) / PEPTIDES_PER_PROTEIN ))
+
+if [[ "$EXECUTION_STAGE" != "finalize" ]]; then
+  rm -rf "$OUTPUT_ROOT"
+  mkdir -p "$OUTPUT_ROOT"/{generated_inputs,rendered_configs,selection_qc,condition_inputs,tdfs}
 
 python "$ROOT/tools/generate_synthetic_fasta.py" \
   --out "$FASTA" \
@@ -194,6 +222,7 @@ python "$ROOT/tools/render_study_configs.py" \
   --timsim-threads "$TIMSIM_THREADS" \
   --batch-size "$BATCH_SIZE" \
   --frame-batch-size "$FRAME_BATCH_SIZE" \
+  "${GPU_RENDER_ARGS[@]}" \
   --blueprint-only
 
 printf '\n=== TimSim blueprint ===\n'
@@ -288,16 +317,29 @@ python "$ROOT/tools/render_study_configs.py" \
   --gradient-length "$GRADIENT_LENGTH" \
   --timsim-threads "$TIMSIM_THREADS" \
   --batch-size "$BATCH_SIZE" \
-  --frame-batch-size "$FRAME_BATCH_SIZE"
+  --frame-batch-size "$FRAME_BATCH_SIZE" \
+  "${GPU_RENDER_ARGS[@]}"
+
+  printf '\nStudy preparation complete: %s\n' "$OUTPUT_ROOT"
+fi
+
+if [[ "$EXECUTION_STAGE" == "prepare" ]]; then
+  printf 'Rendered biological configs are ready for parallel execution under: %s/rendered_configs\n' "$OUTPUT_ROOT"
+  exit 0
+fi
 
 printf '\n=== TimSim biological study runs ===\n'
 mapfile -t RUN_CONFIGS < <(find "$OUTPUT_ROOT/rendered_configs" -maxdepth 1 -type f -name '[0-9][0-9][0-9]_[CT][0-9][0-9].toml' | sort)
 EXPECTED_RUNS=$(( CONTROL_RUNS + TREATMENT_RUNS ))
 (( ${#RUN_CONFIGS[@]} == EXPECTED_RUNS )) || { echo "ERROR: rendered ${#RUN_CONFIGS[@]} study configs; expected $EXPECTED_RUNS" >&2; exit 1; }
-for config in "${RUN_CONFIGS[@]}"; do
-  printf '\n--- %s ---\n' "$(basename "$config")"
-  run_timsim "$config"
-done
+if [[ "$EXECUTION_STAGE" == "full" ]]; then
+  for config in "${RUN_CONFIGS[@]}"; do
+    printf '\n--- %s ---\n' "$(basename "$config")"
+    run_timsim "$config"
+  done
+else
+  printf 'Finalize-only mode: verifying %d parallel TimSim runs before truth assembly.\n' "$EXPECTED_RUNS"
+fi
 
 python "$ROOT/tools/build_study_realized_truth.py" \
   --fixture-root "$OUTPUT_ROOT" \
@@ -372,6 +414,13 @@ manifest = {
         "design_truth_tsv": "OpenSwathTimSim.study_design_truth.tsv",
         "abundance_truth_tsv": "OpenSwathTimSim.study_abundance_truth.tsv",
         "realized_truth_tsv": "OpenSwathTimSim.realized_truth.tsv",
+    },
+    "execution": {
+        "stage": ${EXECUTION_STAGE@Q},
+        "timsim_use_gpu": ${USE_GPU@Q} == "true",
+        "timsim_threads": int(${TIMSIM_THREADS@Q}),
+        "batch_size": int(${BATCH_SIZE@Q}),
+        "frame_batch_size": int(${FRAME_BATCH_SIZE@Q}),
     },
     "randomization": {
         "seed_plan_version": 3,

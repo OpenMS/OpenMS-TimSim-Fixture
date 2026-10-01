@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+__pycache__
+.pytest_cache
+*.pyc
+fixtures
+benchmarks
+results
+studies
+*.d
+*.sif
+*.tar
+*.tar.gz

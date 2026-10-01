@@ -11,3 +11,12 @@ fixtures/
 benchmarks/
 results/
 *.d/
+
+# Local container build artifacts.
+*.sif
+*.docker.tar
+*.docker.tar.sha256
+
+# Site-specific deployment belongs outside version control.
+local-deployment/
+.local-deployment/

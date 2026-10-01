@@ -62,8 +62,8 @@ the full 1,000-target/1,000-entrapment library:
   --treatment-runs 3 \
   --precursors 1000 \
   --entrapments 1000 \
-  --simulated-peptides 10000 \
-  --fasta-peptides 20000
+  --simulated-peptides 14000 \
+  --fasta-peptides 28000
 ```
 
 Then run the isolated OpenDIA lanes:
@@ -220,4 +220,8 @@ and less collision-prone supports DIA interference as the source of attenuation.
 compression in the tight configuration points upstream toward TimSim fragment/raw response
 and should be resolved before the canonical 25+25 study. OpenDIA agreement is reported as
 a downstream check, not as a criterion for choosing extraction parameters.
+## Parallel GPU generation
 
+The canonical study can be generated with the portable CUDA container without changing its scientific contract. `generate_study.sh` supports `--use-gpu`, `--prepare-only`, and `--finalize-only`; the default local path remains a complete sequential run. `performance.use_gpu` is therefore rendered explicitly into each TimSim configuration and recorded in final execution provenance.
+
+Large studies may split preparation, independent biological-run generation, and finalization across a site-specific scheduler. Preparation must freeze the target and entrapment libraries before parallel biological runs start, and the GPU path should pass the optional CPU-to-GPU frozen-selection/library hash gate before production generation. Scheduler-specific launchers, paths, GPU resource names, and concurrency policy are deliberately outside this repository; see `docs/CONTAINERS.md` for the portable image contract.

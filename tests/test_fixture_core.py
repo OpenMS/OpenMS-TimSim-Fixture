@@ -313,8 +313,8 @@ def test_multirun_study_defaults_and_dynamic_opendia_contract() -> None:
     assert '"mode": ${SELECTION_MODE@Q}' in study
     assert '"target_proteins": int(${TARGET_PROTEINS@Q})' in study
     assert "ENTRAPMENTS=1000" in study
-    assert "SIMULATED_PEPTIDES=10000" in study
-    assert "FASTA_PEPTIDES=20000" in study
+    assert "SIMULATED_PEPTIDES=14000" in study
+    assert "FASTA_PEPTIDES=28000" in study
     assert "select_reference_precursors.py" in study
     assert "prepare_study_databases.py" in study
     assert "build_study_realized_truth.py" in study
@@ -908,3 +908,75 @@ def test_protein_balanced_study_validator_enforces_exact_contract() -> None:
     broken = selected.iloc[:-1].copy()
     with pytest.raises(SystemExit, match="exactly 4 precursors/protein"):
         module.validate_protein_selection_contract(broken, manifest)
+
+
+def test_study_renderer_can_enable_gpu(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.d"
+    reference.mkdir()
+    fasta = tmp_path / "synthetic.fasta"
+    fasta.write_text(">P\nPEPTIDEK\n", encoding="utf-8")
+    rendered = tmp_path / "rendered"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(TOOLS / "render_study_configs.py"),
+            "--repo-root", str(ROOT),
+            "--output-root", str(tmp_path / "out"),
+            "--rendered-dir", str(rendered),
+            "--reference", str(reference),
+            "--fasta", str(fasta),
+            "--blueprint-sample-seed", "999",
+            "--n-proteins", "1",
+            "--num-peptides-total", "1",
+            "--num-sample-peptides", "1",
+            "--use-gpu",
+            "--blueprint-only",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    text = (rendered / "000_blueprint.toml").read_text(encoding="utf-8")
+    assert "use_gpu = true" in text
+
+
+def test_generate_study_supports_parallel_gpu_stages() -> None:
+    text = (ROOT / "scripts" / "generate_study.sh").read_text(encoding="utf-8")
+    assert "--use-gpu" in text
+    assert "--prepare-only" in text
+    assert "--finalize-only" in text
+    assert 'EXECUTION_STAGE=full' in text
+    assert 'GPU_RENDER_ARGS+=(--use-gpu)' in text
+
+
+
+def test_container_workflow_builds_portable_docker_and_sif() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "container-images.yml").read_text(encoding="utf-8")
+    sif_builder = (ROOT / "scripts" / "container" / "build_sif_from_docker_archive.sh").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "ghcr.io/${GITHUB_REPOSITORY,,}" in workflow
+    assert "docker save --output" in workflow
+    assert "build_sif_from_docker_archive.sh" in workflow
+    assert "actions/upload-artifact@v7" in workflow
+    assert "docker-archive:" in sif_builder
+    assert "apptainer" in sif_builder
+    assert "singularity" in sif_builder
+    assert "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04" in dockerfile
+    assert '"imspy-simulation==0.4.2"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_public_docs_exclude_personal_and_site_specific_paths() -> None:
+    public_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            ROOT / "docs" / "HANDOFF.md",
+            ROOT / "docs" / "CONTAINERS.md",
+            ROOT / "docs" / "STUDY_BENCHMARK.md",
+        )
+    ).lower()
+    assert "/nfs/research/" not in public_text
+    assert "/home/sing/" not in public_text

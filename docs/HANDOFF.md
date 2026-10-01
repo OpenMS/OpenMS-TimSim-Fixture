@@ -266,7 +266,7 @@ The generated fixture passed all structural/truth checks:
 
 Canonical fresh production-validation paths:
 
-- study root: `/home/sing/Documents/datasets/OpenMS-TimSim-Fixture/studies/production_validation_3x3`;
+- study root: `<DATA_ROOT>/studies/production_validation_3x3`;
 - target truth: `OpenSwathTimSim.realized_truth.tsv` (6,000 target/run rows);
 - study manifest: `OpenSwathTimSim.study_manifest.tsv`;
 - design truth: `OpenSwathTimSim.study_design_truth.tsv`.
@@ -350,4 +350,21 @@ Canonical production design:
 - independent-entrapment lane retained as the canonical external-null FDR/FDP benchmark;
 - raw oracle and tight/high-specificity sweep retained as diagnostic-only measurement-model layers.
 
-Next action: generate the canonical 25+25 study with the same policy family and unchanged production-selection thresholds, then run the isolated target-only and independent-entrapment OpenDIA lanes. Use the 25+25 cohort to measure differential-abundance power, effect-size dependence, empirical false-positive behavior, replicate-count subsampling, and final quantitative/FDR performance.
+Next action: generate the canonical 25+25 study with the same policy family and unchanged production-selection thresholds. GPU execution may be used through the portable Docker/SIF path, but site-specific scheduling and storage remain external deployment concerns. First prove CPU-to-GPU frozen-assay parity, then generate/finalize/validate the fixture, and only then run the isolated target-only and independent-entrapment OpenDIA lanes. Use the 25+25 cohort to measure differential-abundance power, effect-size dependence, empirical false-positive behavior, replicate-count subsampling, and final quantitative/FDR performance.
+
+## Portable GPU container distribution — implemented
+
+The production architecture remains frozen. GPU execution is treated only as an execution optimization; target selection, high-signal thresholds, assay construction, truth, and OpenDIA parameters remain unchanged.
+
+The public repository now contains only portable container infrastructure:
+
+- `docker/Dockerfile`: CUDA/cuDNN runtime generation image with Python 3.11 and pinned `imspy-simulation==0.4.2`;
+- `scripts/container/build_docker.sh`: local immutable Docker build keyed by Git SHA;
+- `scripts/container/export_docker_archive.sh`: exact Docker archive plus SHA-256;
+- `scripts/container/build_sif_from_docker_archive.sh`: generic Apptainer/SingularityCE conversion from that Docker archive;
+- `.github/workflows/container-images.yml`: builds and validates Docker, publishes the immutable Docker image to GHCR, converts the exact built image to SIF, validates the SIF, and uploads SIF/checksum/provenance as a workflow artifact;
+- `docs/CONTAINERS.md`: portable container build/distribution contract.
+
+Site-specific HPC deployment has deliberately been removed from the public Git tree. Personal filesystem roots, cluster aliases, scheduler resource policy, Slurm launchers, and retry wrappers belong in a separate local/private deployment bundle. The scientific repository therefore exposes the portable execution contract (`generate_study.sh --use-gpu`, container image, SIF image) without making any one site's scheduler layout part of the project API.
+
+Current next step: validate the GitHub Actions container build at the current revision, download or deploy the resulting immutable SIF to the chosen GPU cluster using site-local tooling, verify CPU-to-GPU frozen-assay parity, then generate the canonical 25+25 study. Do not change the frozen production selection/assay policy in response to cluster execution details.

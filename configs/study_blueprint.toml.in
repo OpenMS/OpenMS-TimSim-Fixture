@@ -55,7 +55,7 @@ superimpose_on_reference = false
 down_sample_factor = 0.0
 
 [performance]
-use_gpu = false
+use_gpu = @USE_GPU@
 num_threads = @TIMSIM_THREADS@
 batch_size = @BATCH_SIZE@
 frame_batch_size = @FRAME_BATCH_SIZE@

@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+generation = [
+  "pandas>=2.1",
+]
 benchmark = [
   "matplotlib>=3.8",
   "numpy>=2.0",

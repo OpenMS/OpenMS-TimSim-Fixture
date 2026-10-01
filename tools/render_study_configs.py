@@ -39,6 +39,7 @@ def main() -> int:
     parser.add_argument("--timsim-threads", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--frame-batch-size", type=int, default=100)
+    parser.add_argument("--use-gpu", action="store_true", help="Render TimSim configs with performance.use_gpu=true")
     parser.add_argument("--blueprint-only", action="store_true")
     args = parser.parse_args()
 
@@ -64,6 +65,7 @@ def main() -> int:
         "@TIMSIM_THREADS@": str(args.timsim_threads),
         "@BATCH_SIZE@": str(args.batch_size),
         "@FRAME_BATCH_SIZE@": str(args.frame_batch_size),
+        "@USE_GPU@": "true" if args.use_gpu else "false",
     }
     blueprint_path = rendered / "000_blueprint.toml"
     render_template(
