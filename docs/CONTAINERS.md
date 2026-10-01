@@ -64,3 +64,13 @@ The registry image is therefore the normal Docker distribution surface, while th
 ## Deployment boundary
 
 The public repository deliberately stops at portable image production. Site-specific Slurm scripts, storage roots, GPU resource requests, module configuration, and retry launchers should live in a separate local/private deployment directory. This prevents one site's assumptions or personal filesystem paths from becoming part of the project API.
+
+## GitHub Actions troubleshooting
+
+The container workflow builds with BuildKit `--progress=plain` so a failed image layer is visible directly in the Actions log. To inspect only failed steps from the command line:
+
+```bash
+gh run view <run-id> --log-failed
+```
+
+The Dockerfile deliberately avoids shell/Dockerfile heredoc blocks in build-critical `RUN` instructions. This keeps the image build compatible with the BuildKit frontend used by GitHub-hosted runners. The project metadata also declares the `generation` extra explicitly; the container installs `.[generation]` and therefore fails early if the generation dependency contract is accidentally removed.

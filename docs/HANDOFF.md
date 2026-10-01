@@ -368,3 +368,14 @@ The public repository now contains only portable container infrastructure:
 Site-specific HPC deployment has deliberately been removed from the public Git tree. Personal filesystem roots, cluster aliases, scheduler resource policy, Slurm launchers, and retry wrappers belong in a separate local/private deployment bundle. The scientific repository therefore exposes the portable execution contract (`generate_study.sh --use-gpu`, container image, SIF image) without making any one site's scheduler layout part of the project API.
 
 Current next step: validate the GitHub Actions container build at the current revision, download or deploy the resulting immutable SIF to the chosen GPU cluster using site-local tooling, verify CPU-to-GPU frozen-assay parity, then generate the canonical 25+25 study. Do not change the frozen production selection/assay policy in response to cluster execution details.
+
+## Container CI first-run hardening — 2026-10-01
+
+The first public GitHub Actions container run (`36872487807`, revision `6873bab`) reached the `Build Docker image` step and exited with code 1 before any image or SIF artifact was published. The public tree exposed two CI-fragile issues that are now hardened:
+
+- the Dockerfile used multiline heredoc-style Python `RUN` blocks without an explicit Dockerfile frontend contract; these build-time checks/provenance writers are now single-line Python commands and the Dockerfile pins `# syntax=docker/dockerfile:1.7`;
+- the public `pyproject.toml` had lost the `generation` optional dependency group even though the container installs `.[generation]`; the extra is restored with `pandas>=2.1`.
+
+The workflow now builds with BuildKit `--progress=plain` so subsequent failures expose the exact failing command in `gh run view <run-id> --log-failed`. A regression test enforces the Dockerfile/frontend, no-heredoc, generation-extra, and plain-progress contracts.
+
+Current next step: push this CI-hardening commit, let `container-images.yml` rerun, then inspect/publish the immutable GHCR Docker image and CI-derived SIF. Do not start the 25+25 GPU generation until the image passes the SIF validation and the site-local CUDA probe / CPU-to-GPU frozen-assay parity gate.

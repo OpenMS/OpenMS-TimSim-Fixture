@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # CUDA-runtime-only image for TimSim generation. Development compilers/toolchains are not retained.
 FROM ghcr.io/astral-sh/uv:0.8.22 AS uv
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
@@ -36,33 +37,12 @@ RUN uv python install 3.11
 WORKDIR /opt/openms-timsim-fixture
 COPY . /opt/openms-timsim-fixture
 
-# generation extra is intentionally smaller than the full benchmark environment.
+# The generation extra is intentionally smaller than the full benchmark environment.
 RUN uv venv --python 3.11 /opt/venv \
  && uv pip install --python /opt/venv/bin/python ".[generation]" \
- && /opt/venv/bin/python - <<'PY'
-import importlib.metadata
-import torch
-assert torch.version.cuda is not None, "CUDA-enabled PyTorch was not installed"
-print("Python runtime OK")
-print("imspy-simulation", importlib.metadata.version("imspy-simulation"))
-print("torch", torch.__version__, "CUDA", torch.version.cuda)
-PY
+ && /opt/venv/bin/python -c 'import importlib.metadata as m, torch; assert torch.version.cuda is not None, "CUDA-enabled PyTorch was not installed"; print("Python runtime OK"); print("imspy-simulation", m.version("imspy-simulation")); print("torch", torch.__version__, "CUDA", torch.version.cuda)'
 
-RUN { \
-      printf 'git_sha=%s\n' "$GIT_SHA"; \
-      printf 'build_utc=%s\n' "$BUILD_UTC"; \
-      /opt/venv/bin/python - <<'PY'; \
-import importlib.metadata
-import platform
-import torch
-print(f"python={platform.python_version()}")
-for name in ("openms-timsim-fixture", "imspy-simulation", "imspy-connector", "imspy-core", "imspy-predictors", "torch", "pandas"):
-    try:
-        print(f"{name}={importlib.metadata.version(name)}")
-    except importlib.metadata.PackageNotFoundError:
-        pass
-print(f"torch_cuda={torch.version.cuda}")
-PY
-    } > /opt/openms-timsim-fixture/container-build-info.txt
+RUN printf 'git_sha=%s\nbuild_utc=%s\n' "$GIT_SHA" "$BUILD_UTC" > /opt/openms-timsim-fixture/container-build-info.txt \
+ && /opt/venv/bin/python -c 'import importlib.metadata as m, platform, torch; names=("openms-timsim-fixture","imspy-simulation","imspy-connector","imspy-core","imspy-predictors","torch","pandas"); print("python=" + platform.python_version()); [print(name + "=" + m.version(name)) for name in names if name in {d.metadata["Name"] for d in m.distributions()}]; print("torch_cuda=" + str(torch.version.cuda))' >> /opt/openms-timsim-fixture/container-build-info.txt
 
 CMD ["/bin/bash"]

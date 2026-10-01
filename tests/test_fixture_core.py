@@ -980,3 +980,17 @@ def test_public_docs_exclude_personal_and_site_specific_paths() -> None:
     ).lower()
     assert "/nfs/research/" not in public_text
     assert "/home/sing/" not in public_text
+
+
+def test_container_dockerfile_and_generation_extra_are_ci_safe() -> None:
+    import tomllib
+
+    dockerfile = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "container-images.yml").read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert dockerfile.startswith("# syntax=docker/dockerfile:1.7\n")
+    assert "<<'PY'" not in dockerfile
+    assert '".[generation]"' in dockerfile
+    assert metadata["project"]["optional-dependencies"]["generation"] == ["pandas>=2.1"]
+    assert "--progress=plain" in workflow

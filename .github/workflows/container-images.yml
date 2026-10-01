@@ -58,6 +58,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           docker buildx build \
+            --progress=plain \
             --load \
             --platform linux/amd64 \
             --cache-from type=gha \
