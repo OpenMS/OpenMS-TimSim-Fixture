@@ -5,7 +5,7 @@ Cluster-specific schedulers, filesystem paths, usernames, aliases, and deploymen
 
 ## Docker image
 
-`docker/Dockerfile` contains only the generation environment. It uses a CUDA/cuDNN runtime base, Python 3.11, the pinned `imspy-simulation==0.4.2`, and the fixture generation code. OpenMS/OpenDIA and the plotting/scientific-analysis stack are not installed in this image.
+`docker/Dockerfile` contains only the generation environment. It uses a CUDA 12.8/cuDNN runtime base, Python 3.11, the pinned `imspy-simulation==0.4.2`, a pinned `torch==2.11.0+cu128` build, and the fixture generation code. The CUDA/PyTorch pin is intentional: the portable image targets NVIDIA hosts whose driver supports CUDA 12.8 without requiring CUDA 13.x driver support. OpenMS/OpenDIA and the plotting/scientific-analysis stack are not installed in this image.
 
 Build locally from a clean Git revision:
 
@@ -24,6 +24,16 @@ Export exactly that image as a Docker archive when an offline/HPC conversion is 
 ```bash
 ./scripts/container/export_docker_archive.sh
 ```
+
+## CUDA compatibility contract
+
+The generation image deliberately targets CUDA **12.8** end to end:
+
+- base image: `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04`;
+- PyTorch: `torch==2.11.0+cu128` from the official PyTorch cu128 wheel index;
+- Docker CI and SIF validation both require `torch.version.cuda == "12.8"`.
+
+This avoids silently resolving a newer PyTorch wheel whose embedded CUDA runtime requires a newer NVIDIA driver than the execution host. A successful container build therefore proves the payload is a CUDA 12.8 build; actual GPU availability must still be checked on the execution host with `--nv`.
 
 ## SIF image
 

@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1.7
 # CUDA-runtime-only image for TimSim generation. Development compilers/toolchains are not retained.
 FROM ghcr.io/astral-sh/uv:0.8.22 AS uv
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG GIT_SHA=unknown
 ARG BUILD_UTC=unknown
+ARG PYTORCH_VERSION=2.11.0+cu128
+ARG PYTORCH_CUDA_INDEX=https://download.pytorch.org/whl/cu128
 
 LABEL org.opencontainers.image.title="OpenMS-TimSim-Fixture" \
       org.opencontainers.image.source="https://github.com/OpenMS/OpenMS-TimSim-Fixture" \
@@ -38,9 +40,13 @@ WORKDIR /opt/openms-timsim-fixture
 COPY . /opt/openms-timsim-fixture
 
 # The generation extra is intentionally smaller than the full benchmark environment.
+# Pin PyTorch to a CUDA 12.8 wheel so the image remains compatible with hosts whose
+# NVIDIA driver exposes CUDA 12.8 but cannot initialize CUDA 13.x binaries.
 RUN uv venv --python 3.11 /opt/venv \
- && uv pip install --python /opt/venv/bin/python ".[generation]" \
- && /opt/venv/bin/python -c 'import importlib.metadata as m, torch; assert torch.version.cuda is not None, "CUDA-enabled PyTorch was not installed"; print("Python runtime OK"); print("imspy-simulation", m.version("imspy-simulation")); print("torch", torch.__version__, "CUDA", torch.version.cuda)'
+ && UV_EXTRA_INDEX_URL="$PYTORCH_CUDA_INDEX" UV_INDEX_STRATEGY=unsafe-best-match \
+      uv pip install --python /opt/venv/bin/python \
+        "torch==$PYTORCH_VERSION" ".[generation]" \
+ && /opt/venv/bin/python -c 'import importlib.metadata as m, torch; assert torch.version.cuda == "12.8", f"Expected CUDA 12.8 PyTorch, got {torch.version.cuda}"; print("Python runtime OK"); print("imspy-simulation", m.version("imspy-simulation")); print("torch", torch.__version__, "CUDA", torch.version.cuda)'
 
 RUN printf 'git_sha=%s\nbuild_utc=%s\n' "$GIT_SHA" "$BUILD_UTC" > /opt/openms-timsim-fixture/container-build-info.txt \
  && /opt/venv/bin/python -c 'import importlib.metadata as m, platform, torch; names=("openms-timsim-fixture","imspy-simulation","imspy-connector","imspy-core","imspy-predictors","torch","pandas"); print("python=" + platform.python_version()); [print(name + "=" + m.version(name)) for name in names if name in {d.metadata["Name"] for d in m.distributions()}]; print("torch_cuda=" + str(torch.version.cuda))' >> /opt/openms-timsim-fixture/container-build-info.txt

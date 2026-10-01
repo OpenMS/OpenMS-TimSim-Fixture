@@ -379,3 +379,39 @@ The first public GitHub Actions container run (`36872487807`, revision `6873bab`
 The workflow now builds with BuildKit `--progress=plain` so subsequent failures expose the exact failing command in `gh run view <run-id> --log-failed`. A regression test enforces the Dockerfile/frontend, no-heredoc, generation-extra, and plain-progress contracts.
 
 Current next step: push this CI-hardening commit, let `container-images.yml` rerun, then inspect/publish the immutable GHCR Docker image and CI-derived SIF. Do not start the 25+25 GPU generation until the image passes the SIF validation and the site-local CUDA probe / CPU-to-GPU frozen-assay parity gate.
+
+## Container CI success and cluster deployment — 2026-10-01
+
+GitHub Actions run `36874548664` completed successfully for the portable container workflow. The single `Docker + SIF` job completed every stage: checkout, Buildx setup, metadata resolution, GHCR login, Docker build, GHCR push, exact Docker export, Apptainer installation, Docker-archive-to-SIF conversion, SIF payload verification, provenance writing, artifact staging, and SIF artifact upload.
+
+The portable image is therefore ready for cluster deployment. On a SingularityCE cluster, the GHCR Docker image can be pulled directly with a `docker://ghcr.io/...` URI; SingularityCE converts OCI/Docker layers into a local SIF. This route is convenient for site deployment but may not yield a byte-identical SIF to the CI artifact because the conversion occurs again on the cluster. If byte-identical SIF provenance is required, use the CI-uploaded SIF artifact (or publish the CI-built SIF itself through an OCI/ORAS registry in a future workflow iteration).
+
+Site-specific cluster launchers remain outside the public repository. The preferred execution layout is still preparation -> GPU Slurm array -> finalization, with one biological run per array task and retry isolation by array index. Before any large production run, perform a short `singularity exec --nv` CUDA probe and preserve the container/source revision in the run specification.
+
+## Large-scale realism benchmark proposal — discussion state
+
+The validated 1,000-target / 250-protein × 4-precursor fixture remains the frozen correctness/FDR benchmark and should not be replaced. A second, larger scale benchmark is now under consideration to exercise realistic DIA library density and raw-data complexity: approximately 150,000 target precursor groups across 25 control + 25 treatment runs.
+
+This scale-up should be treated as a new benchmark tier rather than a modification of the validated 1,000-target scientific contract. The existing 250 × 4 composition cannot simply be scaled to 150,000 targets because that would imply 37,500 proteins. The large benchmark needs its own protein/precursor composition, informed by a blueprint-only eligibility census, while retaining the same anti-circularity rules (selection before OpenDIA; no raw-oracle or OpenDIA feedback into target choice).
+
+A 150,000-target library with 8 transitions/precursor already contains 1.2 million target transitions. Using 150,000 independent entrapments would double the target-labelled library to 2.4 million transitions before OpenDIA-generated decoys and would add substantial compute/storage cost with little calibration benefit. The preferred starting point is therefore approximately 150,000 true targets plus 25,000 independent entrapments; the entrapment count can be revisited after a scale pilot.
+
+Do not launch the full 50-run 150k study immediately. First run a GPU scale pilot that measures: blueprint eligibility and feasible per-protein multiplicity; GPU memory and utilization; TimSim wall time; output `.d` size; frame-assembly scaling; and frozen-assay reproducibility. A sensible first candidate universe is on the order of 150,000 simulated peptides from roughly 300,000 FASTA candidate peptides, but the exact target protein count / precursors-per-protein contract must be chosen from the simulator-only eligibility census rather than assumed in advance.
+
+Current next step: pull the immutable GHCR image to the target GPU cluster, run the CUDA probe, then run a blueprint-only / one-run large-scale pilot before deciding the final 150k composition and 25+25 scheduler concurrency. Keep the validated 1k benchmark as the correctness reference throughout.
+
+## GPU-cluster CUDA compatibility probe and container correction — 2026-10-01
+
+The first successfully published GPU container (`e35cf5307f622abf847e187677aa048377ed2129`) was pulled from GHCR on a target SingularityCE GPU cluster and converted successfully to a local SIF. Embedded provenance reported Python 3.11.13, `imspy-simulation=0.4.2`, `imspy-core=0.4.2`, `imspy-predictors=0.5.2`, `torch=2.14.1`, and `torch_cuda=13.0`.
+
+A GPU allocation with Singularity `--nv` exposed the host NVIDIA driver correctly, but `torch.cuda.is_available()` returned false. PyTorch reported that the host driver supports CUDA 12.8 while the container's PyTorch binary was compiled for CUDA 13.0. This is a container dependency-resolution mismatch, not a TimSim, Singularity, Slurm, or GPU-allocation failure. Do not use the `e35cf5307f62` image for GPU production generation.
+
+The portable container contract is now corrected to target CUDA 12.8 explicitly:
+
+- CUDA base image: `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04`;
+- PyTorch: `torch==2.11.0+cu128` from the official PyTorch cu128 index;
+- `imspy-predictors 0.5.2` is compatible because it requires `torch>=2.0.0`;
+- Docker build validation and SIF validation both fail unless `torch.version.cuda == "12.8"`;
+- CI provenance explicitly records `pytorch_cuda=12.8`.
+
+Current next step: build/publish a new immutable container at the corrected revision, pull that new SHA-tagged image to the GPU cluster, and repeat the short `singularity exec --nv` CUDA probe. Only after `torch.cuda.is_available()` is true and the GPU name is reported should the 1,000-target 25+25 parallel generation be submitted. Keep the prior CUDA-13 SIF only as failed-deployment provenance or remove it to reclaim space; never alias it as the production image.

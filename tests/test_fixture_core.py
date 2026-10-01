@@ -964,7 +964,11 @@ def test_container_workflow_builds_portable_docker_and_sif() -> None:
     assert "docker-archive:" in sif_builder
     assert "apptainer" in sif_builder
     assert "singularity" in sif_builder
-    assert "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04" in dockerfile
+    assert "nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04" in dockerfile
+    assert "PYTORCH_VERSION=2.11.0+cu128" in dockerfile
+    assert "https://download.pytorch.org/whl/cu128" in dockerfile
+    assert 'torch.version.cuda == "12.8"' in dockerfile
+    assert 'torch.version.cuda == "12.8"' in workflow
     assert '"imspy-simulation==0.4.2"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
@@ -980,6 +984,7 @@ def test_public_docs_exclude_personal_and_site_specific_paths() -> None:
     ).lower()
     assert "/nfs/research/" not in public_text
     assert "/home/sing/" not in public_text
+    assert "codon" not in public_text
 
 
 def test_container_dockerfile_and_generation_extra_are_ci_safe() -> None:

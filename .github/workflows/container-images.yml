@@ -70,7 +70,7 @@ jobs:
             .
 
           docker run --rm "$IMAGE:$SHA_TAG" \
-            python -c 'import importlib.metadata, torch; print("imspy-simulation", importlib.metadata.version("imspy-simulation")); print("torch", torch.__version__, "CUDA build", torch.version.cuda)'
+            python -c 'import importlib.metadata, torch; assert torch.version.cuda == "12.8", f"Expected CUDA 12.8 PyTorch, got {torch.version.cuda}"; print("imspy-simulation", importlib.metadata.version("imspy-simulation")); print("torch", torch.__version__, "CUDA build", torch.version.cuda)'
 
       - name: Push Docker image
         shell: bash
@@ -140,7 +140,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           apptainer exec "$SIF" \
-            python -c 'import importlib.metadata, torch; assert torch.version.cuda is not None; print("imspy-simulation", importlib.metadata.version("imspy-simulation")); print("torch", torch.__version__, "CUDA build", torch.version.cuda)'
+            python -c 'import importlib.metadata, torch; assert torch.version.cuda == "12.8", f"Expected CUDA 12.8 PyTorch, got {torch.version.cuda}"; print("imspy-simulation", importlib.metadata.version("imspy-simulation")); print("torch", torch.__version__, "CUDA build", torch.version.cuda)'
           apptainer exec "$SIF" \
             cat /opt/openms-timsim-fixture/container-build-info.txt
 
@@ -162,6 +162,7 @@ jobs:
             echo "docker_image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE:$SHA_TAG")"
             echo "docker_archive_sha256=$(sha256sum "$DOCKER_ARCHIVE" | awk '{print $1}')"
             echo "sif_sha256=$(sha256sum "$SIF" | awk '{print $1}')"
+            echo "pytorch_cuda=12.8"
             echo "build_utc=$BUILD_UTC"
             echo "runner_os=$RUNNER_OS"
             echo "runner_arch=$RUNNER_ARCH"
