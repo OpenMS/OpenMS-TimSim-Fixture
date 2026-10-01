@@ -310,3 +310,7 @@ They cover synthetic FASTA replay, tryptic peptide construction, condition-coord
 ## Design notes
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the scientific contract and [`docs/HANDOFF.md`](docs/HANDOFF.md) for the current development status and next validation steps.
+
+## Large-scale and single-cell benchmark tiers
+
+The repository also supports scratch-materialized scale studies that reuse one frozen large assay reference without persisting one source database per run. The initial presets target a 150,000-precursor variable-proteome assay, a 50+50 bulk study, and a 48-cell low-input calibration panel with true zero-event targets. See `docs/SCALE_BENCHMARKS.md`.

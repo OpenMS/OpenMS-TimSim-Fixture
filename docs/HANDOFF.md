@@ -415,3 +415,68 @@ The portable container contract is now corrected to target CUDA 12.8 explicitly:
 - CI provenance explicitly records `pytorch_cuda=12.8`.
 
 Current next step: build/publish a new immutable container at the corrected revision, pull that new SHA-tagged image to the GPU cluster, and repeat the short `singularity exec --nv` CUDA probe. Only after `torch.cuda.is_available()` is true and the GPU name is reported should the 1,000-target 25+25 parallel generation be submitted. Keep the prior CUDA-13 SIF only as failed-deployment provenance or remove it to reclaim space; never alias it as the production image.
+
+## 2026-10-01: GPU execution validated; large-scale + single-cell setup implemented
+
+### Validated execution state
+
+- Portable generation image revision used on the cluster: `cc2565d0382ee707b54bb3df8f6b0416e81f2115`.
+- Container payload: Python 3.11.13, `imspy-simulation==0.4.2`, `imspy-core==0.4.2`, `imspy-predictors==0.5.2`, `torch==2.11.0+cu128`, CUDA 12.8.
+- GPU runtime probe passed on an NVIDIA A100 80 GB PCIe with `torch.cuda.is_available() == True`.
+- Local canonical 25 control + 25 treatment / 1,000-target study completed successfully: 50 runs, 1,000 frozen targets, 250 proteins x 4 precursors, 50,000 realized-truth rows, invariant RT/mz/IM identity across runs.
+- Storage audit of that 25x25 study: approximately 17 GB total, while final `.d` directories are approximately 80-84 MB each. This demonstrated that copied source DB/intermediate state, not final raw data, is the dominant avoidable storage cost.
+
+### New scale architecture
+
+The 1,000-target benchmark remains frozen as the correctness/calibration tier. Two additional tiers are now supported without changing its scientific contract.
+
+A shared scale-reference preset creates one high-input GPU blueprint from 600k FASTA candidates / 300k simulated peptides and requests 150k targets using the existing simulator-only `global_stratified` selection policy. This preserves naturally variable precursor multiplicity across proteins rather than imposing the 250x4 correctness design. The reference generation is a census gate: if fewer than 150k targets pass the established filters, increase the candidate universe rather than weaken those filters. No core selector semantics are changed for this scale tier.
+
+Large biological studies now use scratch-local materialization. Persistent state contains the immutable blueprint DB, deterministic run plan, frozen assay/library, final `.d` data, per-run selected-target truth/stats, and provenance. Each worker materializes one perturbed source DB in local scratch, runs TimSim, extracts truth, then deletes the source DB and nonessential run intermediates. This avoids O(runs) persistent copies of a large SQLite source database.
+
+### Large bulk v1
+
+Recommended first scale checkpoint:
+
+- 50 control + 50 treatment = 100 runs;
+- 150,000 frozen true precursor targets;
+- variable precursor multiplicity across proteins;
+- target-only raw-generation reference initially; scale external-null entrapments are deferred to a separate library-only step after raw/OpenDIA throughput is measured;
+- GPU TimSim array generation with one run per task;
+- compact persisted output.
+
+Do not jump directly to 500 runs until the 100-run tier establishes raw size, scratch use, GPU/CPU efficiency, queue behavior, and OpenDIA resource requirements.
+
+### Single-cell / low-input tier
+
+Single-cell abundance now has an explicit stochastic truth model rather than clamping every peptide to at least one event. The model applies a relative global input offset, cell-size variation, protein/peptide variation, then Poisson event sampling with true zero events allowed.
+
+Truth contains both `BiologicalPresentInRun` (`RealizedInputEvents > 0`) and `ObservableInSimulation` (positive realized TimSim precursor signal). Run-specific zero-event assay targets are therefore known biological absences for that cell and are distinct from globally absent external entrapments.
+
+The first calibration panel is 48 cells (24 control + 24 treatment) balanced across log2 input offsets -6, -8, -10, -12. These are relative TimSim input levels, not picogram labels. OpenDIA depth/missingness from that panel should determine one fixed production offset. The production preset then defaults to 100 control + 100 treatment cells and requires that calibrated offset explicitly.
+
+### New portable code
+
+- `tools/plan_materialized_study.py`
+- `tools/materialize_study_run.py`
+- `tools/render_materialized_run_config.py`
+- `tools/extract_materialized_run_truth.py`
+- `tools/finalize_materialized_study.py`
+- `scripts/run_materialized_study_task.sh`
+- `scripts/finalize_materialized_study.sh`
+- `scripts/scale/prepare_scale_reference.sh`
+- `scripts/scale/plan_large_bulk_study.sh`
+- `scripts/scale/plan_single_cell_calibration.sh`
+- `scripts/scale/plan_single_cell_study.sh`
+- `docs/SCALE_BENCHMARKS.md`
+
+The scale implementation is additive: it does not modify `generate_study.sh`, the existing correctness selector, or the frozen 1,000-target study semantics.
+
+### Next execution gate
+
+1. Build/publish a new generation image containing this scale implementation.
+2. Generate only the 300k-peptide / 150k-target scale reference on one GPU.
+3. Inspect the selection census and blueprint/runtime/storage metrics before launching biological arrays.
+4. If the 150k target contract succeeds, run one materialized bulk task and one task at each single-cell calibration input level as smoke checks.
+5. Then launch the 50+50 bulk array and 48-cell calibration array.
+6. Select one single-cell production input level from the calibration results, freeze it, and only then launch 100+100 cells.
