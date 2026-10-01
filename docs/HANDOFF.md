@@ -254,3 +254,54 @@ Required first checkpoint is the blueprint selection stage itself:
 
 If fewer than 250 proteins have four eligible precursor groups, increase `--simulated-peptides` and `--fasta-peptides`; do not weaken high-signal thresholds. Once the fresh 3+3 study passes structural validation, run the existing isolated target-only and independent-entrapment OpenDIA lanes and compare identification, FDR, and protein quantitative recovery. If that passes, generate the canonical 25+25 study without further architecture changes.
 
+
+## Final 3+3 production-design generation — completed
+
+The first production-contract attempt used a 10,000-peptide blueprint / 20,000-peptide FASTA candidate pool. TimSim completed the blueprint successfully, but the selector found only 198 proteins with at least four eligible precursor groups. The production selector therefore failed closed before any biological runs were generated, as intended. No high-signal threshold was relaxed.
+
+The production validation was rerun with a 14,000-peptide blueprint / 28,000-peptide FASTA candidate pool. This completed successfully and produced the fresh study:
+
+- 3 control + 3 treatment runs;
+- 1,000 frozen target precursors;
+- exactly 250 selected proteins × 4 precursor groups/protein;
+- 1,000 independent entrapments;
+- 1,400 proteins in the synthetic design universe;
+- 11,869 realized peptides/run;
+- 17,867 precursor ions/run;
+- 276 frames/run.
+
+The generated fixture passed all structural/truth checks:
+
+- `Study contract OK: 6 runs (3 control + 3 treatment), 1000 frozen targets, 1400 design proteins`;
+- `Production target contract OK: 250 proteins x 4 precursors/protein`;
+- design truth, realized abundance truth, and per-run realized precursor truth are internally consistent;
+- RT/mz/IM identities are unchanged across all six runs;
+- abundance changes versus the first run affect 11,822–11,847 of 11,869 realized peptides (median 11,841).
+
+Canonical fresh production-validation paths:
+
+- study root: `/home/sing/Documents/datasets/OpenMS-TimSim-Fixture/studies/production_validation_3x3`;
+- target truth: `OpenSwathTimSim.realized_truth.tsv` (6,000 target/run rows);
+- study manifest: `OpenSwathTimSim.study_manifest.tsv`;
+- design truth: `OpenSwathTimSim.study_design_truth.tsv`.
+
+The candidate-pool requirement is therefore now empirically established for this seed/configuration: 10k/20k is insufficient (198/250 proteins), while 14k/28k satisfies the fixed 250×4 contract. Do not lower scientific eligibility thresholds to reduce this requirement.
+
+## Current next step — OpenDIA validation of the final production design
+
+Do not change fixture generation further at this checkpoint. Run the existing isolated OpenDIA lanes on `production_validation_3x3`:
+
+1. target-only lane for identification, localization, quantification, and differential effects;
+2. independent-entrapment lane for external-null FDR/FDP calibration;
+3. study benchmark/post-processing;
+4. quantification diagnostics focused on protein realized-vs-OpenDIA recovery.
+
+Primary acceptance questions:
+
+- target/run recovery remains near 100% at q <= 0.01;
+- independent-entrapment run/global FDP remains close to nominal 1%;
+- design -> realized effects remain near the previous ~0.98 correlation;
+- enforcing four precursor groups per selected protein materially improves protein realized -> OpenDIA effect recovery relative to the prior mixed-multiplicity study (previous r≈0.78 overall; prior 3+ precursor stratum r≈0.99, MAE≈0.053);
+- no systematic RT/IM localization regression appears.
+
+If this final 3+3 production-design validation passes, generate the canonical 25 control + 25 treatment benchmark using the same 14k/28k (or larger, but not smaller) candidate pool and the unchanged 250×4 selection contract. No additional architecture iteration is planned unless the final 3+3 OpenDIA validation exposes a new failure.
