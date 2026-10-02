@@ -27,7 +27,7 @@ python "$ROOT/tools/plan_materialized_study.py" \
   --control-runs "$CONTROL_RUNS" \
   --treatment-runs "$TREATMENT_RUNS" \
   --profile single_cell \
-  --input-log2-offset-levels "$INPUT_LEVELS" \
+  --input-log2-offset-levels="$INPUT_LEVELS" \
   --event-sampling poisson \
   --allow-zero-events \
   --run-log2-sd 0.10 \

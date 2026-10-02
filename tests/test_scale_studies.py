@@ -270,6 +270,7 @@ def test_scale_presets_keep_reference_and_run_materialization_separate() -> None
     runner = (SCRIPTS / "run_materialized_study_task.sh").read_text(encoding="utf-8")
     assert "CONTROL_RUNS:-50" in bulk and "TREATMENT_RUNS:-50" in bulk
     assert "INPUT_LEVELS:--6,-8,-10,-12" in sc
+    assert '--input-log2-offset-levels="$INPUT_LEVELS"' in sc
     assert "COMPACT_OUTPUT" in runner
     assert "materialize_study_run.py" in runner
 

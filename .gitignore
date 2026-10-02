@@ -20,3 +20,5 @@ results/
 # Site-specific deployment belongs outside version control.
 local-deployment/
 .local-deployment/
+# Local scratch / command transcripts.
+tmp.og

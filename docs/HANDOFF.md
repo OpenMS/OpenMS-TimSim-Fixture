@@ -545,3 +545,38 @@ Next gates before opening large arrays:
 4. Only after those smokes pass, submit the 50+50 bulk tier and then the 24+24 single-cell calibration panel / 100+100 production cells.
 
 Site-local Slurm deployment remains outside the public repository. For the current 300k-peptide source universe, materialized GPU worker memory must be sized from the observed reference capacity (~306 GB peak host RSS) rather than the old 96 GB small-fixture default.
+
+## 2026-10-02: 150k bulk 1x1 smoke passed; single-cell smoke submitted
+
+The first materialized large-bulk smoke against the frozen 150k scale reference completed successfully end-to-end with one control and one treatment run. The dependency-linked planning, GPU array, and finalization stages all completed with exit code 0.
+
+Observed large-run capacity:
+
+- control run wall time: 56m05s; peak RSS 362,279,828 KiB (~345.5 GiB);
+- treatment run wall time: 1h26m46s; peak RSS 372,401,516 KiB (~355.1 GiB);
+- both runs used 8 CPUs and one GPU under a 384 GB/task request;
+- final control `.d`: ~877 MB;
+- final treatment `.d`: ~904 MB;
+- complete 1x1 study tree: ~2.4 GB.
+
+This validates the lazy scratch-local materialization architecture at the 300k-peptide source-universe / 150k-target scale. The 384 GB worker request is sufficient for the observed smoke but has limited headroom (~90-92.5% of the request consumed); keep this resource level or modestly increase it for larger production arrays rather than returning to the historical 96 GB setting.
+
+A single-cell calibration smoke was submitted with 4 control + 4 treatment cells, balanced across log2 input offsets -6, -8, -10, -12, using `MAX_PARALLEL=1` and the same 384 GB/task GPU-worker request. Submission IDs: plan 59286179, array 59286180, finalize 59286181. At the latest checkpoint the planner had only just entered RUNNING (`R 0:00`), while the GPU array and finalizer remained pending with `Dependency`; this is expected until the planner completes successfully. The planner is normally only a few seconds of work, so if it remains RUNNING materially longer, inspect its scheduler stdout/stderr and accounting before changing the dependency chain or resubmitting.
+
+Next gates:
+
+1. Confirm the single-cell planning stage completes and releases the 8-task GPU array.
+2. Run all eight smoke cells one-at-a-time and inspect wall time, peak RSS, final `.d` size, biological-presence counts, observable-target counts, and dropout by input offset.
+3. Choose whether to retain the 384 GB worker request for single-cell production or reduce it based on measured peak RSS.
+4. Only after the smoke passes, submit the 24+24 calibration panel; select one fixed production input offset from depth/missingness behavior; then submit 100+100 production cells.
+5. The 50+50 large-bulk production array is scientifically unblocked by the smoke, but its concurrency should be chosen conservatively from GPU availability and the ~0.9 GB/run raw footprint / ~350 GiB peak worker memory.
+
+## 2026-10-02: single-cell calibration planner CLI fix; repository hygiene
+
+The 4-control + 4-treatment single-cell calibration smoke did not reach the GPU array. Planning job `59286179` failed in one second with exit code 2 because the Bash wrapper passed the negative comma-separated calibration levels as two argv tokens: `--input-log2-offset-levels "$INPUT_LEVELS"`. `argparse` interpreted `-6,-8,-10,-12` as an option-like token and reported `argument --input-log2-offset-levels: expected one argument`. Consequently array `59286180` remained `DependencyNeverSatisfied` and finalizer `59286181` remained blocked. No TimSim GPU work ran and no scale-reference state was damaged.
+
+The public wrapper now passes the value in GNU long-option equals form, `--input-log2-offset-levels="$INPUT_LEVELS"`, which preserves negative comma-separated values as the option argument. A regression assertion in `tests/test_scale_studies.py` freezes this wrapper contract. The failed dependent jobs should be cancelled and the 4+4 calibration smoke resubmitted from a container built from the corrected revision.
+
+Repository hygiene audit also found accidental `tmp.og` command-output/transcript material committed to public history. The file contains local host/filesystem details and is not scientific source. It is removed from the working tree, added to `.gitignore`, and should be purged from Git history with `git-filter-repo`, followed by a reviewed force-with-lease push of the rewritten public branch. Any remote refs containing the file must be audited before declaring the purge complete.
+
+The successfully completed 150k bulk 1x1 smoke remains authoritative: both GPU runs completed, using ~345.5 and ~355.1 GiB peak RSS with final `.d` sizes ~877 and ~904 MB. The frozen 150k scale reference remains unchanged. Immediate next gate after publishing the planner fix is to rebuild/pull the immutable SIF, cancel the dead dependency chain, and resubmit the 4+4 single-cell smoke at input offsets -6/-8/-10/-12 with `MAX_PARALLEL=1`.
