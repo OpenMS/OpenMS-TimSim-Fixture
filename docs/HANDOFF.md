@@ -517,3 +517,31 @@ A new immutable scale-capable image (`4c6e001c820b...`) was pulled successfully 
 The same submission also requested 320 GB / 12 h despite reuse mode. This was traced to stale `REFERENCE_MEM` / `REFERENCE_TIME` environment variables inherited from the prior GPU blueprint submission. The private launcher is corrected so reuse-mode resources use distinct `RESELECT_CPUS`, `RESELECT_MEM`, and `RESELECT_TIME` settings (defaults 8 CPUs, 96 GB, 2 h), and GPU provenance probing is skipped for reuse-mode CPU jobs. No new public container is required for this launcher fix.
 
 The completed blueprint remains authoritative and reusable. Immediate next gate: resubmit selection-only reuse against that exact blueprint with `SELECTION_MODE=scale_variable`; success requires 150,000 selected precursors and a 1,200,001-line target transition TSV (header + 150,000 x 8 transitions). Only after this succeeds should the one-run large-bulk and four-level single-cell smoke tasks be launched.
+
+## 150k scale reference frozen successfully — 2026-10-02
+
+The completed 300,000-peptide TimSim blueprint was reselected without rerunning TimSim using the additive `scale_variable` selector. The scale reference is now frozen successfully:
+
+- requested/selected precursor groups: 150,000/150,000;
+- structurally eligible unique precursor groups before selection: 167,444;
+- selected proteins: 29,863;
+- selected charge states: 77,797 charge-2 and 72,203 charge-3 precursors;
+- selected precursor multiplicity/protein: min 1, median 5, p90 8, p95 8, max 13;
+- eight transitions/precursor, yielding exactly 1,200,000 transition rows plus header;
+- strict correctness-tier high-signal candidates in the same blueprint: 56,574;
+- selection remains blueprint-only and OpenDIA-independent.
+
+The abundance distribution is deliberately broad for the realism tier (reference realized-event proxy median ~14,707, q25 ~1,562, q75 ~147,266), unlike the frozen 1k correctness tier which intentionally selects high-signal targets. Condition-specific missingness is allowed downstream.
+
+The selection-only replay completed in 84 s with ~4.5 GB peak RSS, confirming that the expensive 300k-peptide blueprint can be reused cheaply. The frozen scale-reference tree is ~3.4 GB.
+
+The audit command that attempted to count target groups using `PrecursorGroupId` returned zero because the OpenSWATH transition TSV column is `TransitionGroupId`. The library-size invariant (1,200,001 TSV lines) and selector summary are authoritative and consistent with 150,000 × 8 transitions.
+
+Next gates before opening large arrays:
+
+1. Run a 1-control + 1-treatment large-bulk smoke using the frozen 150k reference and lazy scratch materialization.
+2. Run a 4-control + 4-treatment single-cell calibration smoke so each predeclared input offset (-6, -8, -10, -12 log2) is represented once per condition.
+3. Measure per-run wall time, host/GPU memory, scratch use, final `.d` size, selected-target biological presence/observability, and TimSim completion.
+4. Only after those smokes pass, submit the 50+50 bulk tier and then the 24+24 single-cell calibration panel / 100+100 production cells.
+
+Site-local Slurm deployment remains outside the public repository. For the current 300k-peptide source universe, materialized GPU worker memory must be sized from the observed reference capacity (~306 GB peak host RSS) rather than the old 96 GB small-fixture default.
