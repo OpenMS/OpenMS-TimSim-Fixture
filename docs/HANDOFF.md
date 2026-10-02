@@ -501,3 +501,19 @@ This establishes that the original scale-reference preset was incorrectly reusin
 The scale tier now has an explicit `scale_variable` selection contract. It preserves >=8 usable fragments, blueprint presence, safe DIA geometry, positive simulator-realized signal, and RT-edge safety; chooses one charge state per peptide; and deterministically preserves the joint RT/mz/IM/realized-abundance distribution. The established `global_stratified` and `protein_balanced` correctness modes remain unchanged.
 
 The completed 300k blueprint is reusable: `REUSE_BLUEPRINT=1` skips TimSim and reruns only scale selection/library/QC generation. The immediate next gate is to reselect the existing blueprint for 150,000 `scale_variable` targets. If fewer than 150,000 structurally valid unique peptide precursors remain, only then reconsider candidate-universe size or the scale-tier fragment-count contract; do not rerun the 300k TimSim blueprint preemptively.
+
+## 2026-10-02: 150k structural census passed; CPU reselection launcher failure isolated
+
+A zero-cost audit of the completed 300k-peptide blueprint candidate table established that the 150k scale target is feasible without rerunning TimSim. Using the scale-tier structural contract (safe DIA geometry, blueprint presence, RT-edge safety, and positive realized event/frame/scan/ion support) produced:
+
+- 230,791 structurally valid precursor ions;
+- 167,444 unique peptide precursors after deterministic best-charge selection;
+- 29,934 represented proteins;
+- precursor multiplicity per represented protein: min 1, median 6, p90 8, p95 9, max 14;
+- therefore `target_150k_feasible = true` on the existing completed blueprint.
+
+A new immutable scale-capable image (`4c6e001c820b...`) was pulled successfully to the execution environment. The first `REUSE_BLUEPRINT=1` / `scale_variable` reselection submission then failed immediately with exit 127 after approximately one second and negligible CPU/RSS. This was a site-local launcher bug, not a public scientific-code or container failure: the CPU-only reuse worker executed `nvidia-smi -L` unconditionally while writing provenance. On a non-GPU node that command was unavailable, and `set -e` terminated the job before Singularity or the selector ran.
+
+The same submission also requested 320 GB / 12 h despite reuse mode. This was traced to stale `REFERENCE_MEM` / `REFERENCE_TIME` environment variables inherited from the prior GPU blueprint submission. The private launcher is corrected so reuse-mode resources use distinct `RESELECT_CPUS`, `RESELECT_MEM`, and `RESELECT_TIME` settings (defaults 8 CPUs, 96 GB, 2 h), and GPU provenance probing is skipped for reuse-mode CPU jobs. No new public container is required for this launcher fix.
+
+The completed blueprint remains authoritative and reusable. Immediate next gate: resubmit selection-only reuse against that exact blueprint with `SELECTION_MODE=scale_variable`; success requires 150,000 selected precursors and a 1,200,001-line target transition TSV (header + 150,000 x 8 transitions). Only after this succeeds should the one-run large-bulk and four-level single-cell smoke tasks be launched.
